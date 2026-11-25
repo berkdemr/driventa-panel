@@ -1,6 +1,6 @@
 // Driventa İşletme – Panel arayüzü
-import { api } from "./api.js";
-import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js";
+import { api } from "./api.js?v=0.3";
+import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.3";
 
 const $ = s => document.querySelector(s);
 const root = $("#root");
@@ -387,7 +387,6 @@ function openModal(html, wide) {
   closeModal();
   const w = document.createElement("div"); w.className = "modal-wrap"; w.id = "modal";
   w.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog">${html}</div>`;
-  w.addEventListener("mousedown", e => { if (e.target === w) closeModal(); });
   document.body.appendChild(w);
   w.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", closeModal));
   return w;

@@ -128,8 +128,8 @@ svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.9;stroke
 .icon.danger:hover{color:var(--error)}
 .tfoot{padding:12px 18px;font-size:13px;color:var(--text-2);border-top:1px solid var(--line)}
 .btn-danger{background:rgba(255,107,107,.14);color:var(--error)}
-.modal-wrap{position:fixed;inset:0;background:rgba(5,10,22,.65);z-index:40;display:grid;place-items:center;padding:20px;overflow:auto}
-.modal{background:#16233D;border:1px solid var(--line);border-radius:18px;padding:24px;width:100%;max-width:560px;box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.modal-wrap{position:fixed;inset:0;background:rgba(5,10,22,.65);z-index:40;display:grid;place-items:center;padding:20px;overflow:hidden;overscroll-behavior:contain}
+.modal{background:#16233D;border:1px solid var(--line);border-radius:18px;padding:24px;width:100%;max-width:560px;max-height:calc(100vh - 40px);max-height:calc(100dvh - 40px);overflow-y:auto;overscroll-behavior:contain;box-shadow:0 30px 80px rgba(0,0,0,.5)}
 .modal.wide{max-width:860px}
 .m-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .m-head h3{font-size:19px}
@@ -175,6 +175,6 @@ svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.9;stroke
 <body>
 <div id="root"><div class="center"><div class="spinner"></div></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=0.3"></script>
 </body>
 </html>
