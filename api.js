@@ -6,7 +6,8 @@ import {
   signInWithPopup, GoogleAuthProvider, signOut as fbSignOut, sendPasswordResetEmail, updateProfile
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp
+  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp,
+  writeBatch, arrayUnion, arrayRemove
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -88,5 +89,46 @@ export const api = {
   async listMembers(cid) {
     const s = await getDocs(collection(db, "companies", cid, "members"));
     return s.docs.map(d => ({ uid: d.id, ...d.data() }));
+  },
+
+  /* ---------- Araçlar ---------- */
+  async listVehicles(cid) {
+    const s = await getDocs(collection(db, "companies", cid, "vehicles"));
+    return s.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  async addVehicle(cid, v) {
+    const ref = doc(collection(db, "companies", cid, "vehicles"));
+    await setDoc(ref, { ...v, assignedUid: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    return ref.id;
+  },
+  async updateVehicle(cid, vid, v) {
+    await updateDoc(doc(db, "companies", cid, "vehicles", vid), { ...v, updatedAt: serverTimestamp() });
+  },
+  /* Aracı siler ve atanmış şoförün listesinden çıkarır (tek işlemde) */
+  async deleteVehicle(cid, vid, assignedUid) {
+    const b = writeBatch(db);
+    b.delete(doc(db, "companies", cid, "vehicles", vid));
+    if (assignedUid) b.update(doc(db, "companies", cid, "members", assignedUid), { vehicleIds: arrayRemove(vid) });
+    await b.commit();
+  },
+  /* Aracı şoföre atar; eski şoförden alır (tek işlemde) */
+  async assignVehicle(cid, vid, newUid, oldUid) {
+    const b = writeBatch(db);
+    b.update(doc(db, "companies", cid, "vehicles", vid), { assignedUid: newUid || null, updatedAt: serverTimestamp() });
+    if (oldUid && oldUid !== newUid) b.update(doc(db, "companies", cid, "members", oldUid), { vehicleIds: arrayRemove(vid) });
+    if (newUid && oldUid !== newUid) b.update(doc(db, "companies", cid, "members", newUid), { vehicleIds: arrayUnion(vid) });
+    await b.commit();
+  },
+  /* Excel'den toplu ekleme: 400'lük gruplar halinde yazar */
+  async bulkAddVehicles(cid, list) {
+    let n = 0;
+    for (let i = 0; i < list.length; i += 400) {
+      const b = writeBatch(db);
+      list.slice(i, i + 400).forEach(v => {
+        b.set(doc(collection(db, "companies", cid, "vehicles")), { ...v, assignedUid: null, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      });
+      await b.commit(); n += Math.min(400, list.length - i);
+    }
+    return n;
   }
 };
