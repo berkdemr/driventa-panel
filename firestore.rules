@@ -1,0 +1,94 @@
+rules_version = '2';
+
+// Driventa İşletme – Firestore güvenlik kuralları
+// Roller: owner (şirket sahibi), admin (yönetici), driver (şoför)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function companyPath(cid) { return /databases/$(database)/documents/companies/$(cid); }
+    function memberPath(cid) { return /databases/$(database)/documents/companies/$(cid)/members/$(request.auth.uid); }
+    function me(cid) { return get(memberPath(cid)).data; }
+    function isMember(cid) { return signedIn() && exists(memberPath(cid)) && me(cid).active == true; }
+    function isManager(cid) { return isMember(cid) && me(cid).role in ['owner', 'admin']; }
+    function isDriver(cid) { return isMember(cid) && me(cid).role == 'driver'; }
+    function hasVehicle(cid, vid) { return vid in me(cid).vehicleIds; }
+
+    // Her kullanıcı yalnızca kendi profil kaydını görür ve düzenler
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Katılım kodları: şoför kodu girerek hangi şirkete katılacağını bulur
+    match /joinCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() && isManager(request.resource.data.companyId);
+      allow delete: if signedIn() && isManager(resource.data.companyId);
+      allow update: if false;
+    }
+
+    match /companies/{cid} {
+      allow get: if isMember(cid);
+      allow list: if false;
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isManager(cid) && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow get: if signedIn() && (request.auth.uid == uid || isManager(cid));
+        allow list: if isManager(cid);
+        allow create: if signedIn() && request.auth.uid == uid && (
+          // Şirketi kuran kişi kendini "owner" olarak ekler
+          (request.resource.data.role == 'owner'
+            && get(companyPath(cid)).data.ownerUid == request.auth.uid)
+          ||
+          // Şoför doğru katılım koduyla, araçsız ve aktif olarak katılır
+          (request.resource.data.role == 'driver'
+            && request.resource.data.joinCode == get(companyPath(cid)).data.joinCode
+            && request.resource.data.vehicleIds.size() == 0
+            && request.resource.data.active == true)
+        );
+        // Yöneticiler üyeleri düzenler; şirket sahibinin kaydına sadece sahibi dokunabilir
+        allow update: if isManager(cid) && (
+          uid != get(companyPath(cid)).data.ownerUid
+          || (request.auth.uid == uid && request.resource.data.role == 'owner')
+        );
+        allow delete: if isManager(cid) && uid != get(companyPath(cid)).data.ownerUid;
+      }
+
+      match /vehicles/{vid} {
+        allow read: if isManager(cid) || (isDriver(cid) && hasVehicle(cid, vid));
+        allow write: if isManager(cid);
+      }
+
+      match /records/{rid} {
+        // Şoför sadece kendi girdiği kayıtları görür (toplamları/raporları göremez)
+        allow read: if isManager(cid)
+          || (isDriver(cid) && resource.data.createdBy == request.auth.uid);
+        // Şoför yalnızca kendine atanmış araca, "onay bekliyor" durumunda kayıt ekler
+        allow create: if isManager(cid)
+          || (isDriver(cid)
+              && request.resource.data.createdBy == request.auth.uid
+              && request.resource.data.status == 'pending'
+              && hasVehicle(cid, request.resource.data.aracId));
+        // Şoför, onaylanmamış kendi kaydını düzeltebilir; onaylanan kayda dokunamaz
+        allow update: if isManager(cid)
+          || (isDriver(cid)
+              && resource.data.createdBy == request.auth.uid
+              && resource.data.status == 'pending'
+              && request.resource.data.status == 'pending'
+              && request.resource.data.createdBy == request.auth.uid
+              && hasVehicle(cid, request.resource.data.aracId));
+        allow delete: if isManager(cid)
+          || (isDriver(cid)
+              && resource.data.createdBy == request.auth.uid
+              && resource.data.status == 'pending');
+      }
+
+      match /reminders/{mid} {
+        allow read, write: if isManager(cid);
+      }
+    }
+  }
+}
