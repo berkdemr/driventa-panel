@@ -1,6 +1,6 @@
 // Driventa İşletme – Panel arayüzü
-import { api } from "./api.js?v=0.3";
-import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.3";
+import { api } from "./api.js?v=0.4";
+import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.4";
 
 const $ = s => document.querySelector(s);
 const root = $("#root");
@@ -61,7 +61,7 @@ async function busy(btn, fn) {
 }
 
 /* ---------- Durum ---------- */
-const S = { user: null, profile: null, company: null, member: null, page: "overview", members: null, vehicles: null };
+const S = { user: null, profile: null, company: null, member: null, page: "overview", members: null, vehicles: null, records: null, pending: 0 };
 
 /* ---------- Giriş ekranı ---------- */
 function renderAuth(mode = "login") {
@@ -172,7 +172,7 @@ function renderDriverInfo() {
 const PAGES = [
   { id: "overview", ad: "Özet", ic: "home" },
   { id: "vehicles", ad: "Araçlar", ic: "car" },
-  { id: "approvals", ad: "Kayıt Onayları", ic: "check", soon: true },
+  { id: "approvals", ad: "Kayıt Onayları", ic: "check" },
   { id: "drivers", ad: "Şoförler", ic: "users" },
   { id: "maintenance", ad: "Bakım Takvimi", ic: "wrench", soon: true },
   { id: "settings", ad: "Ayarlar", ic: "cog" }
@@ -185,7 +185,7 @@ function renderShell() {
   <div class="shell">
     <aside class="side" id="side">
       <div class="brand"><img src="assets/logo.png" alt=""><span>Driventa<small>İŞLETME</small></span></div>
-      ${PAGES.map(p => `<button class="nav-item ${S.page === p.id ? "on" : ""}" data-page="${p.id}">${I[p.ic]}${p.ad}${p.soon ? '<span class="soon">Yakında</span>' : ""}</button>`).join("")}
+      ${PAGES.map(p => `<button class="nav-item ${S.page === p.id ? "on" : ""}" data-page="${p.id}">${I[p.ic]}${p.ad}${p.soon ? '<span class="soon">Yakında</span>' : ""}${p.id === "approvals" && S.pending ? `<span class="cnt">${S.pending}</span>` : ""}</button>`).join("")}
       <div class="side-foot">
         <div class="me"><div class="avatar">${esc((nm[0] || "?").toLocaleUpperCase("tr-TR"))}</div>
           <div><b>${esc(nm)}</b><small>${m.role === "owner" ? "Şirket sahibi" : "Yönetici"}</small></div></div>
@@ -219,8 +219,8 @@ const Pages = {
       <div class="kpis">
         <div class="kpi"><small>Araç</small><b id="kVehicles">–</b></div>
         <div class="kpi"><small>Şoför</small><b id="kDrivers">–</b></div>
-        <div class="kpi"><small>Bu ay masraf</small><b>₺0</b></div>
-        <div class="kpi"><small>Onay bekleyen</small><b>0</b></div>
+        <div class="kpi"><small>Bu ay onaylanan masraf</small><b id="kMonth">–</b></div>
+        <a class="kpi" href="#" data-goto="approvals"><small>Onay bekleyen</small><b id="kPending">–</b></a>
       </div>
       <div class="card">
         <h3 style="font-size:17px;margin-bottom:4px">Başlarken</h3>
@@ -236,6 +236,11 @@ const Pages = {
     api.listVehicles(S.company.id).then(vs => { S.vehicles = vs; const el = $("#kVehicles"); if (el) el.textContent = vs.length; }).catch(() => {});
     api.listMembers(S.company.id).then(ms => { S.members = ms; const el = $("#kDrivers"); if (el) el.textContent = ms.filter(x => x.role === "driver").length; })
       .catch(() => { const el = $("#kDrivers"); if (el) el.textContent = "–"; });
+    loadRecords().then(rs => {
+      const d = new Date(); const pre = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const m = rs.filter(r => r.status === "approved" && String(r.tarih).startsWith(pre)).reduce((s, r) => s + (+r.tutar || 0), 0);
+      const a = $("#kMonth"), b = $("#kPending"); if (a) a.textContent = TL(m); if (b) b.textContent = S.pending;
+    }).catch(() => {});
   },
 
   drivers() {
@@ -647,6 +652,163 @@ function confirmInline(btn, label) {
   return false;
 }
 
+/* =====================================================================
+   KAYIT ONAYLARI (F3)
+   Şoförlerin mobil uygulamadan girdiği kayıtlar burada onaylanır/reddedilir.
+   ===================================================================== */
+const REC_TYPES = { yakit: "Yakıt", bakim: "Bakım", sigorta: "Sigorta", mtv: "MTV", muayene: "Muayene", lastik: "Lastik", otopark: "Otopark", hgs: "HGS/OGS", diger: "Diğer" };
+const TL = n => { n = +n || 0; const i = Number.isInteger(n); return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: i ? 0 : 2, maximumFractionDigits: 2 }).format(n); };
+const fmtD = iso => { if (!iso) return "–"; const [y, m, d] = String(iso).split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }); };
+const fmtTs = ms => ms ? new Date(ms).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }) : "–";
+const recDriver = r => r.createdByName || driverName(r.createdBy) || "–";
+const recVehicle = r => (S.vehicles || []).find(v => v.id === r.aracId);
+const REJECT_REASONS = ["Fiş / fatura eksik", "Tutar hatalı", "Kilometre hatalı", "Yanlış araç", "Mükerrer kayıt"];
+let apTab = "pending";
+const apSel = new Set();
+
+async function loadRecords() {
+  S.records = await api.listRecords(S.company.id);
+  S.pending = S.records.filter(r => r.status === "pending").length;
+  updateNavBadge();
+  return S.records;
+}
+function updateNavBadge() {
+  const b = document.querySelector('.side [data-page="approvals"]'); if (!b) return;
+  let s = b.querySelector(".cnt");
+  if (!S.pending) { if (s) s.remove(); return; }
+  if (!s) { s = document.createElement("span"); s.className = "cnt"; b.appendChild(s); }
+  s.textContent = S.pending;
+}
+
+Pages.approvals = function () {
+  apSel.clear();
+  $("#page").innerHTML = `
+    <div class="tabs ap-tabs" id="apTabs"></div>
+    <div class="toolbar">
+      <div class="search">${I.search}<input class="input" id="aq" placeholder="Plaka, şoför veya açıklama ara"></div>
+      <div class="tb-actions" id="apActs"></div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden"><div id="apList"><div style="padding:30px"><div class="spinner"></div></div></div></div>`;
+  $("#aq").addEventListener("input", renderApprovals);
+  const cid = S.company.id;
+  Promise.all([loadRecords(), api.listVehicles(cid), api.listMembers(cid).catch(() => S.members || [])])
+    .then(([, vs, ms]) => { S.vehicles = vs; S.members = ms; renderApprovals(); })
+    .catch(err => { $("#apList").innerHTML = `<div class="alert err" style="margin:16px">${esc(errMsg(err))}</div>`; });
+};
+
+function recDetail(r) {
+  const e = r.ekstra || {}; const parts = [];
+  if (r.tur === "yakit" && e.litre) { const ev = recVehicle(r)?.yakit === "Elektrik"; parts.push(`${NUM(e.litre)} ${ev ? "kWh" : "L"}${e.birimFiyat ? " × " + TL(e.birimFiyat) : ""}${e.tamDepo === false ? " · kısmi" : ""}`); }
+  if (e.altTur) parts.push(e.altTur);
+  if (e.bitis) parts.push("Bitiş: " + fmtD(e.bitis));
+  return parts.map(esc).join(" · ");
+}
+
+function renderApprovals() {
+  const box = $("#apList"); if (!box) return;
+  const all = S.records || [];
+  const cnt = k => all.filter(r => r.status === k).length;
+  $("#apTabs").innerHTML = [["pending", "Bekleyen"], ["approved", "Onaylanan"], ["rejected", "Reddedilen"]]
+    .map(([k, l]) => `<button class="${apTab === k ? "on" : ""}" data-tab="${k}">${l} (${cnt(k)})</button>`).join("");
+  $("#apTabs").querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { apTab = b.dataset.tab; apSel.clear(); renderApprovals(); }));
+
+  const q = trLow($("#aq").value.trim());
+  let list = all.filter(r => r.status === apTab);
+  if (q) list = list.filter(r => trLow(`${r.plaka} ${String(r.plaka || "").replace(/\s/g, "")} ${recDriver(r)} ${r.aciklama} ${REC_TYPES[r.tur]} ${(r.ekstra || {}).altTur || ""}`).includes(q));
+  list.sort((a, b) => String(b.tarih).localeCompare(String(a.tarih)) || (b.createdAt || 0) - (a.createdAt || 0));
+  [...apSel].forEach(id => { if (!list.some(r => r.id === id)) apSel.delete(id); });
+
+  const P = apTab === "pending";
+  $("#apActs").innerHTML = P && list.length ? `<button class="btn btn-primary" id="apBulk" ${apSel.size ? "" : "disabled"}>${I.ok} Seçilenleri onayla${apSel.size ? ` (${apSel.size})` : ""}</button>` : "";
+  if ($("#apBulk")) $("#apBulk").addEventListener("click", e => approve([...apSel], e.currentTarget));
+
+  if (!list.length) {
+    const msg = q ? ["Sonuç yok", "Aramanla eşleşen kayıt bulunamadı."]
+      : P ? ["Bekleyen kayıt yok", "Şoförlerin mobil uygulamadan girdiği kayıtlar burada onayına düşer."]
+      : apTab === "approved" ? ["Henüz onaylanan kayıt yok", "Onayladığın kayıtlar burada listelenir."] : ["Reddedilen kayıt yok", "Reddettiğin kayıtlar ve nedenleri burada listelenir."];
+    box.innerHTML = `<div class="empty"><div class="ic">${I.check}</div><h3>${msg[0]}</h3><p>${msg[1]}</p></div>`;
+    return;
+  }
+  const total = list.reduce((s, r) => s + (+r.tutar || 0), 0);
+  const allOn = P && list.every(r => apSel.has(r.id));
+  box.innerHTML = `<div style="overflow-x:auto"><table class="tbl vt ap">
+    <thead><tr>${P ? `<th class="ck"><input type="checkbox" id="apAll" ${allOn ? "checked" : ""} aria-label="Tümünü seç"></th>` : ""}
+      <th>Tarih</th><th>Araç</th><th>Şoför</th><th>Tür</th><th class="num">Km</th><th class="num">Tutar</th>
+      <th class="hm">${apTab === "rejected" ? "Red nedeni" : "Açıklama"}</th>${P ? "<th></th>" : `<th class="hm">${apTab === "approved" ? "Onay" : "Red"} tarihi</th>`}</tr></thead>
+    <tbody>${list.map(r => {
+      const v = recVehicle(r); const det = recDetail(r);
+      const kmUp = P && r.km != null && v && r.km > (v.km || 0);
+      return `<tr class="${apSel.has(r.id) ? "sel" : ""}">
+      ${P ? `<td class="ck"><input type="checkbox" data-ck="${r.id}" ${apSel.has(r.id) ? "checked" : ""} aria-label="Seç"></td>` : ""}
+      <td style="white-space:nowrap">${fmtD(r.tarih)}</td>
+      <td><span class="plate"><i>TR</i><b>${esc(r.plaka || v?.plaka || "?")}</b></span>${v ? "" : '<div class="errc">Araç silinmiş</div>'}</td>
+      <td style="white-space:nowrap">${esc(recDriver(r))}</td>
+      <td><b style="font-weight:600">${REC_TYPES[r.tur] || esc(r.tur)}</b>${det ? `<div class="muted" style="font-size:12.5px">${det}</div>` : ""}</td>
+      <td class="num">${r.km != null ? NUM(r.km) : "–"}${kmUp ? `<div class="kmup" title="Onaylanınca aracın kilometresi ${NUM(r.km)} olur">↑ araç km</div>` : ""}</td>
+      <td class="num"><b>${TL(r.tutar)}</b></td>
+      <td class="hm muted" style="max-width:240px">${esc(apTab === "rejected" ? (r.redNedeni || "–") : (r.aciklama || "–"))}</td>
+      ${P ? `<td class="acts"><button class="btn btn-sm btn-ok" data-ok="${r.id}">${I.ok} Onayla</button><button class="btn btn-sm btn-danger" data-rej="${r.id}">${I.x} Reddet</button></td>`
+          : `<td class="hm muted" style="white-space:nowrap">${fmtTs(r.reviewedAt)}</td>`}
+    </tr>`; }).join("")}</tbody></table></div>
+    <div class="tfoot">${list.length} kayıt · Toplam <b style="color:var(--text)">${TL(total)}</b>${P ? ` · <span class="muted">Onaylanan kayıtlar şoför tarafından değiştirilemez.</span>` : ""}</div>`;
+
+  if (P) {
+    $("#apAll").addEventListener("change", e => { list.forEach(r => e.target.checked ? apSel.add(r.id) : apSel.delete(r.id)); renderApprovals(); });
+    box.querySelectorAll("[data-ck]").forEach(c => c.addEventListener("change", () => { c.checked ? apSel.add(c.dataset.ck) : apSel.delete(c.dataset.ck); renderApprovals(); }));
+    box.querySelectorAll("[data-ok]").forEach(b => b.addEventListener("click", () => approve([b.dataset.ok], b)));
+    box.querySelectorAll("[data-rej]").forEach(b => b.addEventListener("click", () => rejectModal(all.find(r => r.id === b.dataset.rej))));
+  }
+}
+
+function approve(ids, btn) {
+  if (!ids.length) return;
+  const recs = ids.map(id => S.records.find(r => r.id === id)).filter(Boolean);
+  // Her araç için onaylanan kayıtlardaki en yüksek km, araçtakinden büyükse güncellenir
+  const km = {};
+  recs.forEach(r => { const v = recVehicle(r); if (v && r.km != null && r.km > (v.km || 0) && r.km > (km[v.id] || 0)) km[v.id] = r.km; });
+  busy(btn, async () => {
+    try {
+      await api.approveRecords(S.company.id, ids, S.user.uid, km);
+      const now = Date.now();
+      recs.forEach(r => { r.status = "approved"; r.reviewedAt = now; r.redNedeni = null; apSel.delete(r.id); });
+      Object.entries(km).forEach(([vid, k]) => { const v = S.vehicles.find(x => x.id === vid); if (v) v.km = k; });
+      S.pending = S.records.filter(r => r.status === "pending").length; updateNavBadge();
+      const n = Object.keys(km).length;
+      toast(`${ids.length} kayıt onaylandı.${n ? ` ${n} aracın kilometresi güncellendi.` : ""}`);
+      renderApprovals();
+    } catch (err) {
+      toast(errMsg(err), true);
+      try { await loadRecords(); renderApprovals(); } catch (e) { /* liste yenilenemedi */ }
+    }
+  });
+}
+
+function rejectModal(r) {
+  if (!r) return;
+  const w = openModal(`
+    <div class="m-head"><h3>Kaydı reddet</h3><button class="icon" data-close aria-label="Kapat">${I.x}</button></div>
+    <p class="muted" style="margin-bottom:14px">${esc(r.plaka || "")} · ${REC_TYPES[r.tur] || ""} · ${TL(r.tutar)} · ${fmtD(r.tarih)} · ${esc(recDriver(r))}</p>
+    <div class="field"><label>Red nedeni</label>
+      <div class="chips" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${REJECT_REASONS.map(x => `<button type="button" class="chip" data-rs="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+      <textarea class="input" id="rjText" maxlength="200" rows="3" placeholder="Şoför bu açıklamayı uygulamada görecek ve kaydı düzeltip yeniden gönderebilecek."></textarea>
+    </div>
+    <div class="m-foot"><button class="btn btn-ghost" data-close>Vazgeç</button><button class="btn btn-danger" id="rjOk">${I.x} Reddet</button></div>`);
+  const ta = w.querySelector("#rjText");
+  w.querySelectorAll("[data-rs]").forEach(b => b.addEventListener("click", () => { ta.value = b.dataset.rs; w.querySelectorAll("[data-rs]").forEach(x => x.classList.toggle("on", x === b)); ta.focus(); }));
+  w.querySelector("#rjOk").addEventListener("click", e => {
+    const reason = ta.value.trim();
+    if (!reason) { ta.classList.add("err-b"); return toast("Şoförün düzeltebilmesi için bir neden yaz veya seç.", true); }
+    busy(e.currentTarget, async () => {
+      try {
+        await api.rejectRecord(S.company.id, r.id, reason, S.user.uid);
+        r.status = "rejected"; r.redNedeni = reason; r.reviewedAt = Date.now(); apSel.delete(r.id);
+        S.pending = S.records.filter(x => x.status === "pending").length; updateNavBadge();
+        closeModal(); toast("Kayıt reddedildi. Şoför nedeni uygulamada görecek."); renderApprovals();
+      } catch (err) { toast(errMsg(err), true); }
+    });
+  });
+}
+
 /* ---------- Yükleme akışı ---------- */
 async function loadCompany(cid) {
   const [company, member] = await Promise.all([api.getCompany(cid), api.getMember(cid, S.user.uid)]);
@@ -654,10 +816,11 @@ async function loadCompany(cid) {
   S.company = company; S.member = member;
   if (member.role === "driver") return renderDriverInfo();
   renderShell();
+  loadRecords().catch(() => {}); // menüdeki "onay bekleyen" sayısı için
 }
 
 api.onUser(async user => {
-  S.user = user; S.company = null; S.member = null; S.page = "overview";
+  S.user = user; S.company = null; S.member = null; S.page = "overview"; S.records = null; S.pending = 0;
   if (!user) return renderAuth("login");
   root.innerHTML = '<div class="center"><div class="spinner"></div></div>';
   try {
