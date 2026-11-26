@@ -1,6 +1,6 @@
 // Driventa İşletme – Panel arayüzü
-import { api } from "./api.js?v=0.5";
-import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.5";
+import { api } from "./api.js?v=0.6";
+import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.6";
 
 const $ = s => document.querySelector(s);
 const root = $("#root");
@@ -176,7 +176,7 @@ const PAGES = [
   { id: "approvals", ad: "Kayıt Onayları", ic: "check" },
   { id: "reports", ad: "Raporlar", ic: "chart" },
   { id: "drivers", ad: "Şoförler", ic: "users" },
-  { id: "maintenance", ad: "Bakım Takvimi", ic: "wrench", soon: true },
+  { id: "maintenance", ad: "Bakım Takvimi", ic: "wrench" },
   { id: "settings", ad: "Ayarlar", ic: "cog" }
 ];
 
@@ -224,6 +224,7 @@ const Pages = {
         <a class="kpi" href="#" data-goto="reports"><small>Bu ay onaylanan masraf</small><b id="kMonth">–</b></a>
         <a class="kpi" href="#" data-goto="approvals"><small>Onay bekleyen</small><b id="kPending">–</b></a>
       </div>
+      <div id="mtAlert"></div>
       <div class="card">
         <h3 style="font-size:17px;margin-bottom:4px">Başlarken</h3>
         <p class="muted">Filonu Driventa'ya taşımak için şu adımları izle:</p>
@@ -235,7 +236,15 @@ const Pages = {
         </ol>
       </div>`;
     $("#page").querySelectorAll("[data-goto]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); S.page = a.dataset.goto; renderShell(); }));
-    api.listVehicles(S.company.id).then(vs => { S.vehicles = vs; const el = $("#kVehicles"); if (el) el.textContent = vs.length; }).catch(() => {});
+    api.listVehicles(S.company.id).then(vs => {
+      S.vehicles = vs; const el = $("#kVehicles"); if (el) el.textContent = vs.length;
+      const it = trackItems(vs); const late = it.filter(x => x.st === "late"), soon = it.filter(x => x.st === "soon"); const box = $("#mtAlert");
+      if (box && (late.length || soon.length)) {
+        box.innerHTML = `<a href="#" class="card mt-alert ${late.length ? "late" : ""}" data-goto="maintenance"><span class="ic">${I.wrench}</span>
+          <span><b>Bakım ve belge takibi</b><small>${[late.length ? `${late.length} işin süresi geçti` : "", soon.length ? `${soon.length} iş 30 gün içinde` : ""].filter(Boolean).join(" · ")}${(late[0] || soon[0]) ? ` · İlk: ${esc((late[0] || soon[0]).v.plaka)} ${(late[0] || soon[0]).ad}` : ""}</small></span><span class="go">Takvimi aç →</span></a>`;
+        box.querySelector("[data-goto]").addEventListener("click", e => { e.preventDefault(); S.page = "maintenance"; renderShell(); });
+      }
+    }).catch(() => {});
     api.listMembers(S.company.id).then(ms => { S.members = ms; const el = $("#kDrivers"); if (el) el.textContent = ms.filter(x => x.role === "driver").length; })
       .catch(() => { const el = $("#kDrivers"); if (el) el.textContent = "–"; });
     loadRecords().then(rs => {
@@ -350,6 +359,37 @@ const trUp = s => String(s).toLocaleUpperCase("tr-TR");
 const trLow = s => String(s ?? "").toLocaleLowerCase("tr-TR");
 const typeAd = t => (VEHICLE_TYPES.find(x => x.id === t) || VEHICLE_TYPES[0]).ad;
 
+/* ---------- Bakım / belge takibi alanları (F5) ---------- */
+const TRACK_DATES = [["muayeneBitis", "Muayene bitiş"], ["sigortaBitis", "Trafik sigortası bitiş"], ["kaskoBitis", "Kasko bitiş"], ["sonBakimTarih", "Son periyodik bakım"]];
+const BAKIM_KM_VARSAYILAN = 15000, BAKIM_AY_VARSAYILAN = 12;
+/* Excel hücresindeki tarihi YYYY-AA-GG'ye çevirir. Boşsa "", okunamazsa null */
+function parseDateCell(x) {
+  if (x === "" || x == null) return "";
+  if (typeof x === "number") { if (x > 20000 && x < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(x) * 864e5); return d.toISOString().slice(0, 10); } return null; }
+  const t = String(x).trim(); if (!t) return "";
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return okDate(+m[1], +m[2], +m[3]);
+  m = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/); if (m) return okDate(+m[3], +m[2], +m[1]);
+  if (/^\d+(\.\d+)?$/.test(t)) return parseDateCell(+t);
+  return null;
+}
+function okDate(y, mo, d) { const dt = new Date(Date.UTC(y, mo - 1, d)); return (y >= 1990 && y <= 2100 && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d) ? dt.toISOString().slice(0, 10) : null; }
+function validateTrack(f) {
+  const e = {};
+  TRACK_DATES.forEach(([k]) => { if (f[k] === null) e[k] = "Tarih okunamadı. Örnek: 15.03.2027"; });
+  const num = x => String(x ?? "").replace(/[.\s]/g, "");
+  const sk = num(f.sonBakimKm), ak = num(f.bakimAralikKm), ay = num(f.bakimAralikAy), km = +num(f.km);
+  if (sk && !/^\d+$/.test(sk)) e.sonBakimKm = "Sadece rakam girin."; else if (sk && km && +sk > km) e.sonBakimKm = "Son bakım km'si aracın güncel km'sinden büyük olamaz.";
+  if (ak && !(/^\d+$/.test(ak) && +ak >= 1000 && +ak <= 100000)) e.bakimAralikKm = "1.000 ile 100.000 km arasında olmalı.";
+  if (ay && !(/^\d+$/.test(ay) && +ay >= 1 && +ay <= 60)) e.bakimAralikAy = "1 ile 60 ay arasında olmalı.";
+  if (f.sonBakimTarih && f.sonBakimTarih > isoD(new Date())) e.sonBakimTarih = "Son bakım tarihi ileri bir tarih olamaz.";
+  return e;
+}
+const toTrack = f => {
+  const n = x => { const t = String(x ?? "").replace(/[.\s]/g, ""); return t ? +t : null; };
+  return { muayeneBitis: f.muayeneBitis || null, sigortaBitis: f.sigortaBitis || null, kaskoBitis: f.kaskoBitis || null,
+    sonBakimTarih: f.sonBakimTarih || null, sonBakimKm: n(f.sonBakimKm), bakimAralikKm: n(f.bakimAralikKm), bakimAralikAy: n(f.bakimAralikAy) };
+};
+
 function normalizePlate(raw) {
   const s = trUp(raw).replace(/[\s\-.]/g, "");
   const m = s.match(/^(\d{2})([A-Z]{1,3})(\d{2,5})$/);
@@ -382,6 +422,7 @@ function validateVehicle(f, editId) {
   return e;
 }
 const toVehicle = f => ({
+  ...toTrack(f),
   tur: f.tur, marka: String(f.marka).trim(), model: String(f.model).trim(), yil: parseInt(f.yil, 10),
   plaka: normalizePlate(f.plaka), km: +String(f.km).replace(/[.\s]/g, ""), yakit: f.yakit,
   motor: f.yakit === "Elektrik" || !String(f.motor ?? "").trim() ? null : +f.motor
@@ -469,8 +510,11 @@ function renderVehicleList() {
   }));
 }
 
-function vehicleModal(v) {
+function vehicleModal(v, onDone) {
   const d = v || { tur: "otomobil", marka: "", model: "", yil: "", plaka: "", km: "", yakit: "", motor: "" };
+  const fx = (k, lbl, input) => `<div class="field" data-f="${k}"><label>${lbl}</label>${input}<div class="msg"></div></div>`;
+  const dt = k => `<input class="input" type="date" name="${k}" value="${esc(d[k] || "")}">`;
+  const nm = (k, ph) => `<input class="input" name="${k}" inputmode="numeric" placeholder="${ph || ""}" value="${d[k] != null && d[k] !== "" ? NUM(d[k]) : ""}">`;
   const w = openModal(`
     <div class="m-head"><h3>${v ? "Aracı düzenle" : "Yeni araç"}</h3><button class="icon" data-close>${I.x}</button></div>
     <form id="vf" novalidate>
@@ -484,17 +528,33 @@ function vehicleModal(v) {
         <div class="field" data-f="yakit"><label>Yakıt türü *</label><select class="input" name="yakit"><option value="">Seçin</option>${FUELS.map(f => `<option ${d.yakit === f ? "selected" : ""}>${f}</option>`).join("")}</select><div class="msg"></div></div>
         <div class="field" data-f="motor"><label>Motor hacmi (cc)</label><input class="input" name="motor" inputmode="numeric" maxlength="4" value="${d.motor ? esc(d.motor) : ""}"><div class="msg"></div></div>
       </div>
+      <h4 class="m-sec">Bakım ve belge takibi <span class="muted">· isteğe bağlı</span></h4>
+      <p class="muted" style="font-size:12.5px;margin:-4px 0 12px">Bakım Takvimi bu bilgilerle hazırlanır. Şoförün girdiği sigorta, muayene ve bakım kayıtları onaylanınca bu alanlar kendiliğinden güncellenir.</p>
+      <div class="g2">
+        ${fx("muayeneBitis", "Muayene bitiş tarihi", dt("muayeneBitis"))}
+        ${fx("sigortaBitis", "Trafik sigortası bitiş", dt("sigortaBitis"))}
+        ${fx("kaskoBitis", "Kasko bitiş", dt("kaskoBitis"))}
+        ${fx("sonBakimTarih", "Son periyodik bakım tarihi", dt("sonBakimTarih"))}
+        ${fx("sonBakimKm", "Son bakımdaki km", nm("sonBakimKm", "Örn. 75.000"))}
+        <div class="g2 in">
+          ${fx("bakimAralikKm", "Bakım aralığı (km)", nm("bakimAralikKm", NUM(BAKIM_KM_VARSAYILAN)))}
+          ${fx("bakimAralikAy", "Aralık (ay)", nm("bakimAralikAy", String(BAKIM_AY_VARSAYILAN)))}
+        </div>
+      </div>
       <div class="m-foot"><button type="button" class="btn btn-ghost" data-close>Vazgeç</button><button type="submit" class="btn btn-primary">${v ? "Kaydet" : "Aracı ekle"}</button></div>
     </form>`);
   const f = w.querySelector("#vf");
-  f.km.addEventListener("input", () => { const x = f.km.value.replace(/\D/g, "").slice(0, 7); f.km.value = x ? NUM(+x) : ""; });
+  ["km", "sonBakimKm", "bakimAralikKm"].forEach(k => f[k].addEventListener("input", () => { const x = f[k].value.replace(/\D/g, "").slice(0, 7); f[k].value = x ? NUM(+x) : ""; }));
+  f.bakimAralikAy.addEventListener("input", () => { f.bakimAralikAy.value = f.bakimAralikAy.value.replace(/\D/g, "").slice(0, 2); });
   f.plaka.addEventListener("blur", () => { const p = normalizePlate(f.plaka.value); if (p) f.plaka.value = p; });
   f.addEventListener("input", e => { const el = f.querySelector(`[data-f="${e.target.name}"]`); if (el) el.classList.remove("err"); });
   setTimeout(() => f.plaka.focus(), 50);
   f.addEventListener("submit", e => {
     e.preventDefault();
-    const val = { tur: f.tur.value, marka: f.marka.value.trim(), model: f.model.value.trim(), yil: f.yil.value.trim(), plaka: f.plaka.value.trim(), km: f.km.value.trim(), yakit: f.yakit.value, motor: f.motor.value.trim() };
-    const errs = validateVehicle(val, v ? v.id : null);
+    const val = { tur: f.tur.value, marka: f.marka.value.trim(), model: f.model.value.trim(), yil: f.yil.value.trim(), plaka: f.plaka.value.trim(), km: f.km.value.trim(), yakit: f.yakit.value, motor: f.motor.value.trim(),
+      muayeneBitis: f.muayeneBitis.value, sigortaBitis: f.sigortaBitis.value, kaskoBitis: f.kaskoBitis.value, sonBakimTarih: f.sonBakimTarih.value,
+      sonBakimKm: f.sonBakimKm.value.trim(), bakimAralikKm: f.bakimAralikKm.value.trim(), bakimAralikAy: f.bakimAralikAy.value.trim() };
+    const errs = { ...validateVehicle(val, v ? v.id : null), ...validateTrack(val) };
     f.querySelectorAll(".field").forEach(el => { const k = el.dataset.f; el.classList.toggle("err", !!errs[k]); el.querySelector(".msg").textContent = errs[k] || ""; });
     if (Object.keys(errs).length) return;
     busy(f.querySelector('button[type=submit]'), async () => {
@@ -502,7 +562,7 @@ function vehicleModal(v) {
         const data = toVehicle(val);
         if (v) { await api.updateVehicle(S.company.id, v.id, data); Object.assign(v, data); toast("Araç güncellendi."); }
         else { const id = await api.addVehicle(S.company.id, data); S.vehicles.push({ id, ...data, assignedUid: null }); toast("Araç eklendi."); }
-        closeModal(); renderVehicleList();
+        closeModal(); (onDone || renderVehicleList)();
       } catch (err) { toast(errMsg(err), true); }
     });
   });
@@ -524,15 +584,22 @@ function deleteVehicleModal(v) {
 }
 
 /* ---------- Excel ---------- */
-const XL_HEAD = ["Plaka", "Marka", "Model", "Model Yılı", "Kilometre", "Yakıt Türü", "Araç Türü", "Motor Hacmi (cc)"];
+const XL_HEAD = ["Plaka", "Marka", "Model", "Model Yılı", "Kilometre", "Yakıt Türü", "Araç Türü", "Motor Hacmi (cc)",
+  "Muayene Bitiş", "Trafik Sigortası Bitiş", "Kasko Bitiş", "Son Bakım Tarihi", "Son Bakım Km", "Bakım Aralığı (km)", "Bakım Aralığı (ay)"];
+const XL_W = [14, 16, 18, 12, 13, 15, 13, 17, 15, 21, 13, 17, 14, 18, 18];
+const trDate = iso => iso ? String(iso).split("-").reverse().join(".") : "";
 function templateDownload() {
   const blob = writeXlsx([
-    { name: "Araçlar", widths: [14, 16, 18, 12, 13, 15, 13, 17], rows: [XL_HEAD, ["34 ABC 123", "Renault", "Clio", 2019, 85000, "Benzin", "Otomobil", 999], ["06 BSY 41", "Ford", "Transit Custom", 2021, 64200, "Dizel", "Ticari", ""]] },
+    { name: "Araçlar", widths: XL_W, rows: [XL_HEAD, ["34 ABC 123", "Renault", "Clio", 2019, 85000, "Benzin", "Otomobil", 999, "15.03.2027", "02.08.2027", "02.08.2027", "10.05.2026", 75000, 15000, 12], ["06 BSY 41", "Ford", "Transit Custom", 2021, 64200, "Dizel", "Ticari", "", "", "", "", "", "", "", ""]] },
     { name: "Açıklama", widths: [20, 70], rows: [["Sütun", "Nasıl doldurulur?"],
       ["Plaka *", "Örn. 34 ABC 123 (boşluklar önemli değil)"], ["Marka *", "Örn. Renault"], ["Model *", "Örn. Clio"],
       ["Model Yılı *", "Örn. 2019"], ["Kilometre *", "Sadece rakam. Örn. 85000"],
       ["Yakıt Türü *", FUELS.join(", ")], ["Araç Türü", "Otomobil, Motosiklet veya Ticari (boşsa Otomobil)"],
-      ["Motor Hacmi (cc)", "İsteğe bağlı. Örn. 1461"], ["Not", "Örnek satırları silip kendi araçlarını yaz. * işaretli sütunlar zorunlu."]] }
+      ["Motor Hacmi (cc)", "İsteğe bağlı. Örn. 1461"],
+      ["Muayene Bitiş", "İsteğe bağlı. Gün.Ay.Yıl biçiminde. Örn. 15.03.2027"], ["Trafik Sigortası Bitiş", "İsteğe bağlı. Örn. 02.08.2027"], ["Kasko Bitiş", "İsteğe bağlı. Örn. 02.08.2027"],
+      ["Son Bakım Tarihi", "İsteğe bağlı. Son periyodik bakımın tarihi. Örn. 10.05.2026"], ["Son Bakım Km", "İsteğe bağlı. Son bakımdaki kilometre. Örn. 75000"],
+      ["Bakım Aralığı (km)", "İsteğe bağlı. Boşsa 15000"], ["Bakım Aralığı (ay)", "İsteğe bağlı. Boşsa 12"],
+      ["Not", "Örnek satırları silip kendi araçlarını yaz. * işaretli sütunlar zorunlu."]] }
   ]);
   download(blob, "driventa-arac-sablonu.xlsx");
 }
@@ -557,7 +624,13 @@ function mapType(x) {
 }
 const HEAD_KEYS = { plaka: "plaka", marka: "marka", model: "model", modelyılı: "yil", modelyili: "yil", yıl: "yil", yil: "yil",
   kilometre: "km", km: "km", güncelkilometre: "km", yakıttürü: "yakit", yakitturu: "yakit", yakıt: "yakit", yakit: "yakit",
-  araçtürü: "tur", aracturu: "tur", tür: "tur", tur: "tur", tip: "tur", motorhacmi: "motor", motorhacmicc: "motor", motor: "motor", cc: "motor" };
+  araçtürü: "tur", aracturu: "tur", tür: "tur", tur: "tur", tip: "tur", motorhacmi: "motor", motorhacmicc: "motor", motor: "motor", cc: "motor",
+  muayenebitiş: "muayeneBitis", muayenebitis: "muayeneBitis", muayene: "muayeneBitis", muayenetarihi: "muayeneBitis",
+  trafiksigortasıbitiş: "sigortaBitis", trafiksigortasibitis: "sigortaBitis", trafiksigortası: "sigortaBitis", sigortabitiş: "sigortaBitis", sigorta: "sigortaBitis",
+  kaskobitiş: "kaskoBitis", kaskobitis: "kaskoBitis", kasko: "kaskoBitis",
+  sonbakımtarihi: "sonBakimTarih", sonbakimtarihi: "sonBakimTarih", sonbakım: "sonBakimTarih",
+  sonbakımkm: "sonBakimKm", sonbakimkm: "sonBakimKm", sonbakımkilometresi: "sonBakimKm",
+  bakımaralığıkm: "bakimAralikKm", bakimaraligikm: "bakimAralikKm", bakımaralığıay: "bakimAralikAy", bakimaraligiay: "bakimAralikAy" };
 
 function parseRows(rows) {
   const headIdx = rows.findIndex(r => r && r.some(c => HEAD_KEYS[trLow(c).replace(/[^a-zçğıöşü]/g, "")] === "plaka"));
@@ -571,8 +644,10 @@ function parseRows(rows) {
     if (!r || r.every(c => String(c ?? "").trim() === "")) return;
     const o = {}; map.forEach((k, ci) => { if (k) o[k] = r[ci] ?? ""; });
     const f = { plaka: String(o.plaka ?? "").trim(), marka: String(o.marka ?? "").trim(), model: String(o.model ?? "").trim(),
-      yil: String(o.yil ?? "").trim(), km: String(o.km ?? "").trim(), yakit: mapFuel(o.yakit), tur: mapType(o.tur ?? ""), motor: String(o.motor ?? "").trim() };
-    const errs = validateVehicle(f, null);
+      yil: String(o.yil ?? "").trim(), km: String(o.km ?? "").trim(), yakit: mapFuel(o.yakit), tur: mapType(o.tur ?? ""), motor: String(o.motor ?? "").trim(),
+      muayeneBitis: parseDateCell(o.muayeneBitis), sigortaBitis: parseDateCell(o.sigortaBitis), kaskoBitis: parseDateCell(o.kaskoBitis), sonBakimTarih: parseDateCell(o.sonBakimTarih),
+      sonBakimKm: String(o.sonBakimKm ?? "").trim(), bakimAralikKm: String(o.bakimAralikKm ?? "").trim(), bakimAralikAy: String(o.bakimAralikAy ?? "").trim() };
+    const errs = { ...validateVehicle(f, null), ...validateTrack(f) };
     if (f.tur === "?") errs.tur = "Araç türü Otomobil, Motosiklet veya Ticari olmalı.";
     if (errs.yakit && f.yakit) errs.yakit = `"${f.yakit}" tanınmadı. ${FUELS.join(", ")} olmalı.`;
     const p = normalizePlate(f.plaka);
@@ -615,7 +690,8 @@ async function handleFile(file) {
   if (parsed.error) { res.innerHTML = `<div class="alert err">${esc(parsed.error)}</div>`; return; }
   const ok = parsed.rows.filter(r => r.ok), bad = parsed.rows.filter(r => !r.ok);
   if (!parsed.rows.length) { res.innerHTML = '<div class="alert err">Dosyada araç satırı bulunamadı.</div>'; return; }
-  const LBL = { plaka: "Plaka", marka: "Marka", model: "Model", yil: "Yıl", km: "Km", yakit: "Yakıt", tur: "Tür", motor: "Motor" };
+  const LBL = { plaka: "Plaka", marka: "Marka", model: "Model", yil: "Yıl", km: "Km", yakit: "Yakıt", tur: "Tür", motor: "Motor",
+    muayeneBitis: "Muayene", sigortaBitis: "Trafik sigortası", kaskoBitis: "Kasko", sonBakimTarih: "Son bakım tarihi", sonBakimKm: "Son bakım km", bakimAralikKm: "Bakım aralığı (km)", bakimAralikAy: "Bakım aralığı (ay)" };
   res.innerHTML = `
     <div class="sum"><span class="pill ok">${ok.length} araç aktarılacak</span>${bad.length ? `<span class="pill bad">${bad.length} satırda hata</span>` : ""}</div>
     <div class="prev"><table class="tbl"><thead><tr><th>Satır</th><th>Plaka</th><th>Araç</th><th>Km</th><th>Yakıt</th><th>Durum</th></tr></thead><tbody>
@@ -640,9 +716,10 @@ async function handleFile(file) {
 function exportVehicles() {
   const vs = (S.vehicles || []).slice().sort((a, b) => a.plaka.localeCompare(b.plaka, "tr"));
   if (!vs.length) return toast("İndirilecek araç yok.", true);
-  const rows = [[...XL_HEAD, "Atanan Şoför"], ...vs.map(v => [v.plaka, v.marka, v.model, v.yil, v.km, v.yakit, typeAd(v.tur), v.motor ?? "", driverName(v.assignedUid) || ""])];
+  const rows = [[...XL_HEAD, "Atanan Şoför"], ...vs.map(v => [v.plaka, v.marka, v.model, v.yil, v.km, v.yakit, typeAd(v.tur), v.motor ?? "",
+    trDate(v.muayeneBitis), trDate(v.sigortaBitis), trDate(v.kaskoBitis), trDate(v.sonBakimTarih), v.sonBakimKm ?? "", v.bakimAralikKm ?? "", v.bakimAralikAy ?? "", driverName(v.assignedUid) || ""])];
   const d = new Date(); const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  download(writeXlsx([{ name: "Araçlar", widths: [14, 16, 18, 12, 13, 15, 13, 17, 22], rows }]), `driventa-araclar-${stamp}.xlsx`);
+  download(writeXlsx([{ name: "Araçlar", widths: [...XL_W, 22], rows }]), `driventa-araclar-${stamp}.xlsx`);
   toast("Excel dosyası indirildi.");
 }
 
@@ -740,12 +817,13 @@ function renderApprovals() {
     <tbody>${list.map(r => {
       const v = recVehicle(r); const det = recDetail(r);
       const kmUp = P && r.km != null && v && r.km > (v.km || 0);
+      const dUp = P && v && (r.ekstra || {}).bitis && ["muayene", "sigorta"].includes(r.tur);
       return `<tr class="${apSel.has(r.id) ? "sel" : ""}">
       ${P ? `<td class="ck"><input type="checkbox" data-ck="${r.id}" ${apSel.has(r.id) ? "checked" : ""} aria-label="Seç"></td>` : ""}
       <td style="white-space:nowrap">${fmtD(r.tarih)}</td>
       <td><span class="plate"><i>TR</i><b>${esc(r.plaka || v?.plaka || "?")}</b></span>${v ? "" : '<div class="errc">Araç silinmiş</div>'}</td>
       <td style="white-space:nowrap">${esc(recDriver(r))}</td>
-      <td><b style="font-weight:600">${REC_TYPES[r.tur] || esc(r.tur)}</b>${det ? `<div class="muted" style="font-size:12.5px">${det}</div>` : ""}</td>
+      <td><b style="font-weight:600">${REC_TYPES[r.tur] || esc(r.tur)}</b>${det ? `<div class="muted" style="font-size:12.5px">${det}</div>` : ""}${dUp ? '<div class="kmup">↻ takvim güncellenir</div>' : ""}</td>
       <td class="num">${r.km != null ? NUM(r.km) : "–"}${kmUp ? `<div class="kmup" title="Onaylanınca aracın kilometresi ${NUM(r.km)} olur">↑ araç km</div>` : ""}</td>
       <td class="num"><b>${TL(r.tutar)}</b></td>
       <td class="hm muted" style="max-width:240px">${esc(apTab === "rejected" ? (r.redNedeni || "–") : (r.aciklama || "–"))}</td>
@@ -762,21 +840,39 @@ function renderApprovals() {
   }
 }
 
+/* Onaylanan kayıtlardan araç bilgisi güncellemeleri: km, sigorta/kasko/muayene bitişi, son periyodik bakım */
+const isPeriodic = r => { const e = r.ekstra || {}; const ops = Array.isArray(e.islemler) ? e.islemler : String(e.altTur || "").split(/,\s*/); return ops.some(x => /periyodik bakım|yağ değişimi/i.test(x)); };
+function vehicleUpdatesFor(recs) {
+  const up = {};
+  const cur = (v, k) => (up[v.id] && up[v.id][k] !== undefined) ? up[v.id][k] : v[k];
+  const set = (v, k, val) => { (up[v.id] = up[v.id] || {})[k] = val; };
+  recs.slice().sort((a, b) => String(a.tarih).localeCompare(String(b.tarih))).forEach(r => {
+    const v = recVehicle(r); if (!v) return; const e = r.ekstra || {};
+    if (r.km != null && r.km > (cur(v, "km") || 0)) set(v, "km", r.km);
+    if (e.bitis) {
+      const k = r.tur === "muayene" ? "muayeneBitis" : r.tur === "sigorta" ? (e.altTur === "Kasko" ? "kaskoBitis" : e.altTur === "Trafik sigortası" ? "sigortaBitis" : null) : null;
+      if (k && e.bitis > (cur(v, k) || "")) set(v, k, e.bitis);
+    }
+    if (r.tur === "bakim" && isPeriodic(r) && r.tarih >= (cur(v, "sonBakimTarih") || "")) {
+      set(v, "sonBakimTarih", r.tarih); if (r.km != null) set(v, "sonBakimKm", r.km);
+    }
+  });
+  return up;
+}
+
 function approve(ids, btn) {
   if (!ids.length) return;
   const recs = ids.map(id => S.records.find(r => r.id === id)).filter(Boolean);
-  // Her araç için onaylanan kayıtlardaki en yüksek km, araçtakinden büyükse güncellenir
-  const km = {};
-  recs.forEach(r => { const v = recVehicle(r); if (v && r.km != null && r.km > (v.km || 0) && r.km > (km[v.id] || 0)) km[v.id] = r.km; });
+  const up = vehicleUpdatesFor(recs);
   busy(btn, async () => {
     try {
-      await api.approveRecords(S.company.id, ids, S.user.uid, km);
+      await api.approveRecords(S.company.id, ids, S.user.uid, up);
       const now = Date.now();
       recs.forEach(r => { r.status = "approved"; r.reviewedAt = now; r.redNedeni = null; apSel.delete(r.id); });
-      Object.entries(km).forEach(([vid, k]) => { const v = S.vehicles.find(x => x.id === vid); if (v) v.km = k; });
+      Object.entries(up).forEach(([vid, d]) => { const v = S.vehicles.find(x => x.id === vid); if (v) Object.assign(v, d); });
       S.pending = S.records.filter(r => r.status === "pending").length; updateNavBadge();
-      const n = Object.keys(km).length;
-      toast(`${ids.length} kayıt onaylandı.${n ? ` ${n} aracın kilometresi güncellendi.` : ""}`);
+      const n = Object.keys(up).length;
+      toast(`${ids.length} kayıt onaylandı.${n ? ` ${n} aracın bilgileri güncellendi.` : ""}`);
       renderApprovals();
     } catch (err) {
       toast(errMsg(err), true);
@@ -1005,6 +1101,132 @@ function exportReport(D) {
   ]);
   download(blob, `driventa-rapor-${D.from}_${D.to}.xlsx`);
   toast("Rapor Excel dosyası indirildi.");
+}
+
+/* =====================================================================
+   BAKIM TAKVİMİ (F5)
+   ===================================================================== */
+const MT_KINDS = [["muayene", "Muayene"], ["sigorta", "Trafik sigortası"], ["kasko", "Kasko"], ["bakim", "Periyodik bakım"]];
+const MT = { view: "all", kind: "", q: "" };
+const dayDiff = (a, b) => Math.round((parseIso(b) - parseIso(a)) / 864e5);
+const addMonths = (iso, n) => { const d = parseIso(iso); const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + n); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); d.setDate(Math.min(day, last)); return isoD(d); };
+
+/* Araçlardan takip listesini çıkarır */
+function trackItems(vs) {
+  const today = isoD(new Date()); const out = [];
+  (vs || []).forEach(v => {
+    [["muayeneBitis", "muayene", "Muayene"], ["sigortaBitis", "sigorta", "Trafik sigortası"], ["kaskoBitis", "kasko", "Kasko"]].forEach(([k, t, ad]) => {
+      if (v[k]) out.push({ v, t, ad, date: v[k], days: dayDiff(today, v[k]) });
+    });
+    if (v.sonBakimTarih || v.sonBakimKm != null) {
+      const ak = v.bakimAralikKm || BAKIM_KM_VARSAYILAN, aa = v.bakimAralikAy || BAKIM_AY_VARSAYILAN;
+      const date = v.sonBakimTarih ? addMonths(v.sonBakimTarih, aa) : null;
+      const dueKm = v.sonBakimKm != null ? v.sonBakimKm + ak : null;
+      out.push({ v, t: "bakim", ad: "Periyodik bakım", date, days: date ? dayDiff(today, date) : null, dueKm, remKm: dueKm != null ? dueKm - (v.km || 0) : null });
+    }
+  });
+  out.forEach(x => {
+    const late = (x.days != null && x.days < 0) || (x.remKm != null && x.remKm <= 0);
+    const soon = (x.days != null && x.days <= 30) || (x.remKm != null && x.remKm <= 1000);
+    x.st = late ? "late" : soon ? "soon" : "ok";
+    // sıralama anahtarı: km bazlı yaklaşanları da tahmini güne çevir (günde ~100 km)
+    x.sortKey = Math.min(x.days != null ? x.days : 1e6, x.remKm != null ? Math.floor(x.remKm / 100) : 1e6);
+  });
+  const rank = { late: 0, soon: 1, ok: 2 };
+  return out.sort((a, b) => rank[a.st] - rank[b.st] || a.sortKey - b.sortKey);
+}
+function missingInfo(v) {
+  const m = [];
+  if (!v.muayeneBitis) m.push("Muayene");
+  if (!v.sigortaBitis) m.push("Trafik sigortası");
+  if (!v.sonBakimTarih && v.sonBakimKm == null) m.push("Son bakım");
+  return m;
+}
+function remainText(x) {
+  const parts = [];
+  if (x.days != null) parts.push(x.days < 0 ? `${NUM(-x.days)} gün geçti` : x.days === 0 ? "Bugün" : `${NUM(x.days)} gün kaldı`);
+  if (x.remKm != null) parts.push(x.remKm <= 0 ? `${NUM(-x.remKm)} km geçti` : `${NUM(x.remKm)} km kaldı`);
+  return parts.join(" · ");
+}
+const ST_LBL = { late: ["late", "Süresi geçti"], soon: ["soon", "Yaklaşıyor"], ok: ["ok", "Zamanı var"] };
+
+Pages.maintenance = function () {
+  $("#page").innerHTML = `<div class="card"><div class="spinner"></div></div>`;
+  Promise.all([api.listVehicles(S.company.id), api.listMembers(S.company.id).catch(() => S.members || [])])
+    .then(([vs, ms]) => { S.vehicles = vs; S.members = ms; renderMaintenance(); })
+    .catch(err => { $("#page").innerHTML = `<div class="alert err">${esc(errMsg(err))}</div>`; });
+};
+
+function renderMaintenance() {
+  const vs = S.vehicles || [];
+  const all = trackItems(vs);
+  const late = all.filter(x => x.st === "late").length, soon = all.filter(x => x.st === "soon").length;
+  const miss = vs.filter(v => missingInfo(v).length);
+  if (!vs.length) {
+    $("#page").innerHTML = emptyBox("car", "Henüz araç yok", `Bakım takvimi için önce <a class="link" href="#" data-goto="vehicles">Araçlar</a> sayfasından araç ekle.`);
+    $("#page").querySelectorAll("[data-goto]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); S.page = a.dataset.goto; renderShell(); }));
+    return;
+  }
+  const q = trLow(MT.q);
+  const views = [["all", "Tümü", all.length], ["late", "Süresi geçen", late], ["soon", "30 gün içinde", soon], ["miss", "Bilgisi eksik", miss.length]];
+  $("#page").innerHTML = `
+    <div class="kpis">
+      <button class="kpi kbtn ${late ? "k-late" : ""}" data-v="late"><small>Süresi geçen</small><b>${late}</b><span class="kpi-sub">iş</span></button>
+      <button class="kpi kbtn ${soon ? "k-soon" : ""}" data-v="soon"><small>30 gün içinde</small><b>${soon}</b><span class="kpi-sub">iş</span></button>
+      <button class="kpi kbtn" data-v="all"><small>Takip edilen</small><b>${all.length}</b><span class="kpi-sub">iş · ${vs.length} araç</span></button>
+      <button class="kpi kbtn" data-v="miss"><small>Bilgisi eksik</small><b>${miss.length}</b><span class="kpi-sub">araç</span></button>
+    </div>
+    <div class="rp-bar">
+      <div class="seg" id="mtSeg">${views.map(([k, l, n]) => `<button class="${MT.view === k ? "on" : ""}" data-v="${k}">${l} (${n})</button>`).join("")}</div>
+      ${MT.view !== "miss" ? `<select class="input rp-sel" id="mtKind"><option value="">Tüm işler</option>${MT_KINDS.map(([k, l]) => `<option value="${k}" ${MT.kind === k ? "selected" : ""}>${l}</option>`).join("")}</select>` : ""}
+      <div class="search" style="flex:1;min-width:180px;max-width:300px">${I.search}<input class="input" id="mtQ" placeholder="Plaka veya şoför ara" value="${esc(MT.q)}"></div>
+      <button class="btn btn-ghost" id="mtXls">${I.down} Excel'e indir</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;margin-top:8px"><div id="mtList"></div></div>
+    <p class="muted" style="font-size:12.5px;margin-top:12px">Periyodik bakım; son bakım tarihine bakım aralığı (varsayılan 12 ay) ve son bakım km'sine km aralığı (varsayılan 15.000 km) eklenerek hesaplanır, hangisi önce gelirse. 1.000 km'den az kaldıysa da "yaklaşıyor" sayılır.</p>`;
+
+  const box = $("#mtList");
+  const match = v => !q || trLow(`${v.plaka} ${String(v.plaka).replace(/\s/g, "")} ${v.marka} ${v.model} ${driverName(v.assignedUid)}`).includes(q);
+  if (MT.view === "miss") {
+    const list = miss.filter(match);
+    box.innerHTML = list.length ? `<div style="overflow-x:auto"><table class="tbl vt"><thead><tr><th>Araç</th><th class="hm">Şoför</th><th>Eksik bilgi</th><th></th></tr></thead><tbody>
+      ${list.map(v => `<tr><td>${plateCell(v)}</td><td class="hm">${esc(driverName(v.assignedUid) || "–")}</td>
+        <td>${missingInfo(v).map(m => `<span class="st-b miss">${m}</span>`).join(" ")}</td>
+        <td class="acts"><button class="btn btn-sm btn-ghost" data-edit="${v.id}">${I.edit} Bilgileri gir</button></td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty"><div class="ic">${I.ok}</div><h3>${q ? "Sonuç yok" : "Eksik bilgi yok"}</h3><p>${q ? "Aramanla eşleşen araç bulunamadı." : "Tüm araçların muayene, sigorta ve bakım bilgileri girilmiş."}</p></div>`;
+  } else {
+    let list = all.filter(x => (MT.view === "all" || x.st === MT.view) && (!MT.kind || x.t === MT.kind) && match(x.v));
+    box.innerHTML = list.length ? `<div style="overflow-x:auto"><table class="tbl vt mt-t"><thead><tr><th>Durum</th><th>Araç</th><th>İş</th><th>Son tarih</th><th>Kalan</th><th class="hm">Şoför</th><th></th></tr></thead><tbody>
+      ${list.map(x => { const [c, l] = ST_LBL[x.st]; return `<tr>
+        <td><span class="st-b ${c}">${l}</span></td>
+        <td>${plateCell(x.v)}</td>
+        <td><b style="font-weight:600">${x.ad}</b>${x.t === "bakim" && x.dueKm != null ? `<div class="muted" style="font-size:12.5px">Hedef: ${NUM(x.dueKm)} km${x.date ? " veya tarih" : ""}, hangisi önce gelirse</div>` : ""}</td>
+        <td style="white-space:nowrap">${x.date ? fmtD(x.date) : "–"}</td>
+        <td class="rem ${c}">${remainText(x)}</td>
+        <td class="hm">${esc(driverName(x.v.assignedUid) || "–")}</td>
+        <td class="acts"><button class="btn btn-sm btn-ghost" data-edit="${x.v.id}" title="Tarihleri düzenle">${I.edit}</button></td></tr>`; }).join("")}</tbody></table></div>
+      <div class="tfoot">${list.length} iş</div>`
+      : `<div class="empty"><div class="ic">${I.wrench}</div><h3>${all.length ? "Bu filtrede iş yok" : "Henüz takip bilgisi yok"}</h3><p>${all.length ? "Başka bir filtre seç." : 'Araçların muayene, sigorta ve bakım bilgilerini gir. <a class="link" href="#" data-mv="miss">Bilgisi eksik araçları göster</a>'}</p></div>`;
+  }
+
+  const go = v => { MT.view = v; renderMaintenance(); };
+  $("#page").querySelectorAll(".kbtn, #mtSeg [data-v]").forEach(b => b.addEventListener("click", () => go(b.dataset.v)));
+  $("#page").querySelectorAll("[data-mv]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); go(a.dataset.mv); }));
+  if ($("#mtKind")) $("#mtKind").addEventListener("change", e => { MT.kind = e.target.value; renderMaintenance(); });
+  const qi = $("#mtQ"); qi.addEventListener("input", () => { MT.q = qi.value; const pos = qi.selectionStart; renderMaintenance(); const n = $("#mtQ"); n.focus(); n.setSelectionRange(pos, pos); });
+  box.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => vehicleModal(S.vehicles.find(v => v.id === b.dataset.edit), renderMaintenance)));
+  $("#mtXls").addEventListener("click", () => exportMaintenance(all, vs));
+}
+const plateCell = v => `<span class="plate"><i>TR</i><b>${esc(v.plaka)}</b></span><div class="muted" style="font-size:12.5px">${esc(v.marka)} ${esc(v.model)} · ${NUM(v.km || 0)} km</div>`;
+
+function exportMaintenance(all, vs) {
+  if (!vs.length) return toast("İndirilecek araç yok.", true);
+  const rows = [["Durum", "Plaka", "Araç", "İş", "Son tarih", "Bakım km'si", "Kalan gün", "Kalan km", "Güncel km", "Şoför"],
+    ...all.map(x => [ST_LBL[x.st][1], x.v.plaka, `${x.v.marka} ${x.v.model}`, x.ad, trDate(x.date), x.dueKm ?? "", x.days ?? "", x.remKm ?? "", x.v.km ?? "", driverName(x.v.assignedUid) || ""])];
+  const eksik = [["Plaka", "Araç", "Eksik bilgi", "Şoför"], ...vs.filter(v => missingInfo(v).length).map(v => [v.plaka, `${v.marka} ${v.model}`, missingInfo(v).join(", "), driverName(v.assignedUid) || ""])];
+  download(writeXlsx([{ name: "Bakım Takvimi", widths: [14, 14, 22, 18, 13, 13, 11, 11, 12, 20], rows }, { name: "Bilgisi Eksik", widths: [14, 22, 36, 20], rows: eksik }]),
+    `driventa-bakim-takvimi-${isoD(new Date())}.xlsx`);
+  toast("Bakım takvimi Excel dosyası indirildi.");
 }
 
 /* ---------- Yükleme akışı ---------- */

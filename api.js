@@ -9,7 +9,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp,
   writeBatch, arrayUnion, arrayRemove
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=0.5";
+import { firebaseConfig } from "./firebase-config.js?v=0.6";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -138,16 +138,16 @@ export const api = {
     const ms = t => (t && t.toMillis ? t.toMillis() : (typeof t === "number" ? t : null));
     return s.docs.map(d => { const x = d.data(); return { ...x, id: d.id, createdAt: ms(x.createdAt), reviewedAt: ms(x.reviewedAt), updatedAt: ms(x.updatedAt) }; });
   },
-  /* Seçilen kayıtları onaylar. Kayıttaki km araçtakinden yüksekse aracın km'si güncellenir.
-     kmUpdates: { aracId: yeniKm } */
-  async approveRecords(cid, ids, uid, kmUpdates) {
-    let all = ids.map(id => ({ t: "r", id }));
-    Object.entries(kmUpdates || {}).forEach(([vid, km]) => all.push({ t: "v", id: vid, km }));
+  /* Seçilen kayıtları onaylar ve gerekiyorsa araç bilgilerini günceller.
+     vUpdates: { aracId: { km, muayeneBitis, sigortaBitis, kaskoBitis, sonBakimTarih, sonBakimKm } } */
+  async approveRecords(cid, ids, uid, vUpdates) {
+    const all = ids.map(id => ({ t: "r", id }));
+    Object.entries(vUpdates || {}).forEach(([vid, data]) => all.push({ t: "v", id: vid, data }));
     for (let i = 0; i < all.length; i += 400) {
       const b = writeBatch(db);
       all.slice(i, i + 400).forEach(x => {
         if (x.t === "r") b.update(doc(db, "companies", cid, "records", x.id), { status: "approved", reviewedBy: uid, reviewedAt: serverTimestamp(), redNedeni: null });
-        else b.update(doc(db, "companies", cid, "vehicles", x.id), { km: x.km, updatedAt: serverTimestamp() });
+        else b.update(doc(db, "companies", cid, "vehicles", x.id), { ...x.data, updatedAt: serverTimestamp() });
       });
       await b.commit();
     }
