@@ -172,7 +172,44 @@ textarea.input{height:auto;padding:12px 14px;resize:vertical;line-height:1.4;fon
 .input.err-b{border-color:var(--error)}
 .btn[disabled]{opacity:.5;pointer-events:none}
 
+/* Raporlar */
+.rp-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.seg{display:flex;background:var(--card);border-radius:12px;padding:4px;gap:2px}
+.seg button{height:36px;padding:0 14px;border-radius:9px;color:var(--text-2);font-weight:600;font-size:13.5px;white-space:nowrap}
+.seg button.on{background:var(--accent);color:#101B32}
+.rp-dates{display:flex;align-items:center;gap:8px}
+.rp-dates .input{height:44px;width:auto;color-scheme:dark}
+.rp-sel{width:auto;min-width:200px;height:44px;flex:1;max-width:320px}
+#rpXls{margin-left:auto}
+.rp-note{font-size:13px;margin:0 0 16px}
+.kpi-sub{display:block;color:var(--text-2);font-size:12.5px;margin-top:4px}
+.rp-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:16px}
+.rp-h{font-size:16px;margin-bottom:12px}
+.chart{position:relative}
+.chart svg{width:100%;height:auto;display:block;overflow:visible;stroke:none;stroke-width:0}
+.chart svg text{stroke:none}
+.chart .gl{stroke:rgba(42,60,92,.7);stroke-width:1}
+.chart .bl{stroke:var(--line);stroke-width:1}
+.chart .ax{fill:var(--text-2);font-size:11px}
+.chart .hit{fill:transparent;cursor:pointer}
+.chart .bf{fill:var(--accent)}
+.chart .bar.on .hit{fill:rgba(255,255,255,.04)}
+.chart .bar.on .bf{filter:brightness(1.12)}
+.tip{position:absolute;top:0;transform:translate(-50%,-6px);background:#0B1426;border:1px solid var(--line);border-radius:10px;padding:7px 11px;pointer-events:none;opacity:0;transition:opacity .12s;white-space:nowrap;font-size:13px}
+.tip.show{opacity:1}
+.tip small{display:block;color:var(--text-2);font-size:11.5px}
+.hb{margin-bottom:13px}
+.hb-top{display:flex;justify-content:space-between;gap:8px;font-size:13.5px;margin-bottom:6px}
+.hb-track{height:8px;border-radius:999px;background:var(--bg)}
+.hb-fill{height:100%;border-radius:999px;background:var(--accent)}
+.rp-t tr.dim td{color:var(--text-2)}
+
 @media (max-width:900px){
+  .rp-grid{grid-template-columns:1fr}
+  .seg{width:100%;overflow-x:auto}
+  .seg button{flex:1;padding:0 10px}
+  .rp-sel{max-width:none}
+  #rpXls{margin-left:0;width:100%}
   .hm{display:none}
   .g2{grid-template-columns:1fr}
   .toolbar .search{max-width:none}
@@ -197,6 +234,6 @@ textarea.input{height:auto;padding:12px 14px;resize:vertical;line-height:1.4;fon
 <body>
 <div id="root"><div class="center"><div class="spinner"></div></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=0.4"></script>
+<script type="module" src="app.js?v=0.5"></script>
 </body>
 </html>

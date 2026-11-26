@@ -9,7 +9,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp,
   writeBatch, arrayUnion, arrayRemove
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=0.4";
+import { firebaseConfig } from "./firebase-config.js?v=0.5";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);

@@ -1,6 +1,6 @@
 // Driventa İşletme – Panel arayüzü
-import { api } from "./api.js?v=0.4";
-import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.4";
+import { api } from "./api.js?v=0.5";
+import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.5";
 
 const $ = s => document.querySelector(s);
 const root = $("#root");
@@ -24,6 +24,7 @@ const I = {
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>'
 };
 const G_LOGO = '<svg viewBox="0 0 48 48" style="stroke:none"><path fill="#FFC107" d="M43.6 20.1H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 13 4 4 13 4 24s9 20 20 20 20-9 20-20c0-1.3-.1-2.6-.4-3.9z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"/></svg>';
@@ -173,6 +174,7 @@ const PAGES = [
   { id: "overview", ad: "Özet", ic: "home" },
   { id: "vehicles", ad: "Araçlar", ic: "car" },
   { id: "approvals", ad: "Kayıt Onayları", ic: "check" },
+  { id: "reports", ad: "Raporlar", ic: "chart" },
   { id: "drivers", ad: "Şoförler", ic: "users" },
   { id: "maintenance", ad: "Bakım Takvimi", ic: "wrench", soon: true },
   { id: "settings", ad: "Ayarlar", ic: "cog" }
@@ -219,7 +221,7 @@ const Pages = {
       <div class="kpis">
         <div class="kpi"><small>Araç</small><b id="kVehicles">–</b></div>
         <div class="kpi"><small>Şoför</small><b id="kDrivers">–</b></div>
-        <div class="kpi"><small>Bu ay onaylanan masraf</small><b id="kMonth">–</b></div>
+        <a class="kpi" href="#" data-goto="reports"><small>Bu ay onaylanan masraf</small><b id="kMonth">–</b></a>
         <a class="kpi" href="#" data-goto="approvals"><small>Onay bekleyen</small><b id="kPending">–</b></a>
       </div>
       <div class="card">
@@ -657,7 +659,7 @@ function confirmInline(btn, label) {
    Şoförlerin mobil uygulamadan girdiği kayıtlar burada onaylanır/reddedilir.
    ===================================================================== */
 const REC_TYPES = { yakit: "Yakıt", bakim: "Bakım", sigorta: "Sigorta", mtv: "MTV", muayene: "Muayene", lastik: "Lastik", otopark: "Otopark", hgs: "HGS/OGS", diger: "Diğer" };
-const TL = n => { n = +n || 0; const i = Number.isInteger(n); return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: i ? 0 : 2, maximumFractionDigits: 2 }).format(n); };
+const TL = n => { n = Math.round((+n || 0) * 100) / 100; const i = Number.isInteger(n); return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: i ? 0 : 2, maximumFractionDigits: 2 }).format(n); };
 const fmtD = iso => { if (!iso) return "–"; const [y, m, d] = String(iso).split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }); };
 const fmtTs = ms => ms ? new Date(ms).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }) : "–";
 const recDriver = r => r.createdByName || driverName(r.createdBy) || "–";
@@ -807,6 +809,202 @@ function rejectModal(r) {
       } catch (err) { toast(errMsg(err), true); }
     });
   });
+}
+
+/* =====================================================================
+   RAPORLAR (F4) – sadece ONAYLANAN kayıtlar hesaba katılır
+   ===================================================================== */
+const pad2 = n => String(n).padStart(2, "0");
+const isoD = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const parseIso = s => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
+const TLc = n => new Intl.NumberFormat("tr-TR", { notation: "compact", maximumFractionDigits: 1 }).format(n || 0);
+const AYLAR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+const RP_PRESETS = [["month", "Bu ay"], ["last", "Geçen ay"], ["3m", "Son 3 ay"], ["year", "Bu yıl"], ["custom", "Özel"]];
+const RP = { preset: "month", from: "", to: "", vid: "" };
+const typeGroup = t => t === "yakit" ? "yakit" : (t === "bakim" || t === "lastik") ? "bakim" : "diger";
+
+function rpRange() {
+  const t = new Date(); const y = t.getFullYear(), m = t.getMonth();
+  switch (RP.preset) {
+    case "last": return [isoD(new Date(y, m - 1, 1)), isoD(new Date(y, m, 0))];
+    case "3m": return [isoD(new Date(y, m - 2, 1)), isoD(t)];
+    case "year": return [isoD(new Date(y, 0, 1)), isoD(t)];
+    case "custom": return [RP.from || isoD(new Date(y, m, 1)), RP.to || isoD(t)];
+    default: return [isoD(new Date(y, m, 1)), isoD(t)];
+  }
+}
+
+Pages.reports = function () {
+  $("#page").innerHTML = `<div class="card"><div class="spinner"></div></div>`;
+  const cid = S.company.id;
+  Promise.all([loadRecords(), api.listVehicles(cid), api.listMembers(cid).catch(() => S.members || [])])
+    .then(([, vs, ms]) => { S.vehicles = vs; S.members = ms; renderReports(); })
+    .catch(err => { $("#page").innerHTML = `<div class="alert err">${esc(errMsg(err))}</div>`; });
+};
+
+/* Seçili aralık ve araç için hesaplar */
+function rpCompute() {
+  const [from, to] = rpRange();
+  const recs = (S.records || []).filter(r => r.status === "approved" && r.tarih >= from && r.tarih <= to && (!RP.vid || r.aracId === RP.vid));
+  const sum = a => a.reduce((s, r) => s + (+r.tutar || 0), 0);
+  const total = sum(recs);
+  const byGroup = { yakit: 0, bakim: 0, diger: 0 };
+  recs.forEach(r => byGroup[typeGroup(r.tur)] += +r.tutar || 0);
+  // Türlere göre
+  const byType = {};
+  recs.forEach(r => { byType[r.tur] = (byType[r.tur] || 0) + (+r.tutar || 0); });
+  const types = Object.entries(byType).sort((a, b) => b[1] - a[1]);
+  // Araçlara göre
+  const vmap = {};
+  const vs = (S.vehicles || []).filter(v => !RP.vid || v.id === RP.vid);
+  vs.forEach(v => vmap[v.id] = { v, plaka: v.plaka, recs: [] });
+  recs.forEach(r => { (vmap[r.aracId] = vmap[r.aracId] || { v: null, plaka: r.plaka || "?", recs: [] }).recs.push(r); });
+  const vehicles = Object.values(vmap).map(x => {
+    const kms = x.recs.map(r => r.km).filter(k => k != null && k > 0);
+    const dist = kms.length > 1 ? Math.max(...kms) - Math.min(...kms) : 0;
+    const t = sum(x.recs);
+    const g = { yakit: 0, bakim: 0, diger: 0 }; x.recs.forEach(r => g[typeGroup(r.tur)] += +r.tutar || 0);
+    const litre = x.recs.filter(r => r.tur === "yakit").reduce((s, r) => s + (+(r.ekstra || {}).litre || 0), 0);
+    return { ...x, total: t, g, dist, perKm: dist > 0 ? t / dist : null, litre, n: x.recs.length };
+  }).sort((a, b) => b.total - a.total || String(a.plaka).localeCompare(String(b.plaka), "tr"));
+  const distAll = vehicles.reduce((s, x) => s + x.dist, 0);
+  const costWithDist = vehicles.filter(x => x.dist > 0).reduce((s, x) => s + x.total, 0);
+  // Şoförlere göre
+  const dmap = {};
+  recs.forEach(r => { const k = r.createdBy || "?"; (dmap[k] = dmap[k] || { name: recDriver(r), recs: [] }).recs.push(r); });
+  const drivers = Object.values(dmap).map(d => ({ name: d.name, n: d.recs.length, total: sum(d.recs),
+    yakit: d.recs.filter(r => r.tur === "yakit").reduce((s, r) => s + (+r.tutar || 0), 0),
+    last: d.recs.map(r => r.tarih).sort().pop() })).sort((a, b) => b.total - a.total);
+  // Zaman serisi: 62 günden kısa aralıkta günlük, uzunsa aylık
+  const days = Math.round((parseIso(to) - parseIso(from)) / 864e5) + 1;
+  const daily = days <= 62; const buckets = [];
+  if (daily) { for (let d = parseIso(from); d <= parseIso(to); d.setDate(d.getDate() + 1)) buckets.push({ key: isoD(d), label: `${d.getDate()} ${AYLAR[d.getMonth()]}`, v: 0 }); }
+  else { const a = parseIso(from), b = parseIso(to); for (let d = new Date(a.getFullYear(), a.getMonth(), 1); d <= b; d.setMonth(d.getMonth() + 1)) buckets.push({ key: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`, label: `${AYLAR[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`, v: 0 }); }
+  const bi = {}; buckets.forEach((b, i) => bi[b.key] = i);
+  recs.forEach(r => { const k = daily ? r.tarih : r.tarih.slice(0, 7); if (bi[k] != null) buckets[bi[k]].v += +r.tutar || 0; });
+  return { from, to, recs, total, byGroup, types, vehicles, drivers, buckets, daily, perKm: distAll > 0 ? costWithDist / distAll : null, distAll };
+}
+
+function renderReports() {
+  const D = rpCompute();
+  const vs = (S.vehicles || []).slice().sort((a, b) => String(a.plaka).localeCompare(String(b.plaka), "tr"));
+  const pend = (S.records || []).filter(r => r.status === "pending").length;
+  $("#page").innerHTML = `
+    <div class="rp-bar">
+      <div class="seg" id="rpSeg">${RP_PRESETS.map(([k, l]) => `<button class="${RP.preset === k ? "on" : ""}" data-p="${k}">${l}</button>`).join("")}</div>
+      ${RP.preset === "custom" ? `<div class="rp-dates"><input type="date" class="input" id="rpFrom" value="${D.from}" max="${D.to}"><span class="muted">–</span><input type="date" class="input" id="rpTo" value="${D.to}" min="${D.from}"></div>` : ""}
+      <select class="input rp-sel" id="rpVeh"><option value="">Tüm araçlar</option>${vs.map(v => `<option value="${v.id}" ${RP.vid === v.id ? "selected" : ""}>${esc(v.plaka)} · ${esc(v.marka)} ${esc(v.model)}</option>`).join("")}</select>
+      <button class="btn btn-primary" id="rpXls" ${D.recs.length ? "" : "disabled"}>${I.down} Excel'e aktar</button>
+    </div>
+    <p class="muted rp-note">${fmtD(D.from)} – ${fmtD(D.to)} · Sadece onaylanan kayıtlar${pend ? ` · <a class="link" href="#" data-goto="approvals">${pend} kayıt onay bekliyor</a>` : ""}</p>
+    <div class="kpis">
+      <div class="kpi"><small>Toplam masraf</small><b>${TL(D.total)}</b><span class="kpi-sub">${D.recs.length} kayıt</span></div>
+      <div class="kpi"><small>Yakıt</small><b>${TL(D.byGroup.yakit)}</b><span class="kpi-sub">Toplamın %${D.total ? Math.round(D.byGroup.yakit / D.total * 100) : 0}</span></div>
+      <div class="kpi"><small>Bakım ve lastik</small><b>${TL(D.byGroup.bakim)}</b><span class="kpi-sub">Toplamın %${D.total ? Math.round(D.byGroup.bakim / D.total * 100) : 0}</span></div>
+      <div class="kpi"><small>Km başına maliyet</small><b>${D.perKm != null ? TL(Math.round(D.perKm * 100) / 100) : "–"}</b><span class="kpi-sub">${D.distAll ? NUM(D.distAll) + " km yol" : "Km girilen kayıt yetersiz"}</span></div>
+    </div>
+    ${D.recs.length ? `
+    <div class="rp-grid">
+      <div class="card"><h3 class="rp-h">${D.daily ? "Günlük" : "Aylık"} masraf</h3><div class="chart" id="rpChart"></div></div>
+      <div class="card"><h3 class="rp-h">Masraf türleri</h3>${D.types.map(([t, v]) => `
+        <div class="hb"><div class="hb-top"><span>${REC_TYPES[t] || esc(t)}</span><span><b>${TL(v)}</b> <span class="muted">· %${D.total ? (v / D.total * 100).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) : 0}</span></span></div>
+        <div class="hb-track"><div class="hb-fill" style="width:${D.types[0][1] ? Math.max(1.5, v / D.types[0][1] * 100) : 0}%"></div></div></div>`).join("")}
+      </div>
+    </div>` : `<div class="card empty"><div class="ic">${I.chart}</div><h3>Bu aralıkta onaylanan kayıt yok</h3><p>Başka bir tarih aralığı seç ya da <a class="link" href="#" data-goto="approvals">Kayıt Onayları</a> sayfasından bekleyen kayıtları onayla.</p></div>`}
+    <div class="card" style="padding:0;overflow:hidden;margin-top:16px">
+      <h3 class="rp-h" style="padding:16px 18px 0">Araçlara göre</h3>
+      <div style="overflow-x:auto"><table class="tbl vt rp-t"><thead><tr><th>Araç</th><th class="hm">Şoför</th><th class="num">Yakıt</th><th class="num">Bakım/Lastik</th><th class="num hm">Diğer</th><th class="num">Toplam</th><th class="num">Yol (km)</th><th class="num">₺ / km</th><th class="num hm">Kayıt</th></tr></thead>
+      <tbody>${D.vehicles.map(x => `<tr class="${x.n ? "" : "dim"}">
+        <td><span class="plate"><i>TR</i><b>${esc(x.plaka)}</b></span><div class="muted" style="font-size:12.5px">${x.v ? esc(x.v.marka + " " + x.v.model) : "Silinmiş araç"}</div></td>
+        <td class="hm">${x.v ? esc(driverName(x.v.assignedUid) || "–") : "–"}</td>
+        <td class="num">${TL(x.g.yakit)}</td><td class="num">${TL(x.g.bakim)}</td><td class="num hm">${TL(x.g.diger)}</td>
+        <td class="num"><b>${TL(x.total)}</b></td><td class="num">${x.dist ? NUM(x.dist) : "–"}</td>
+        <td class="num">${x.perKm != null ? TL(Math.round(x.perKm * 100) / 100) : "–"}</td><td class="num hm">${x.n}</td></tr>`).join("") || `<tr><td colspan="9" class="muted" style="text-align:center;padding:24px">Araç yok</td></tr>`}</tbody></table></div>
+      <div class="tfoot">Yol, aracın bu aralıktaki kayıtlarında girilen en yüksek ve en düşük km farkıdır. En az iki kayıtta km girilmesi gerekir.</div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;margin-top:16px">
+      <h3 class="rp-h" style="padding:16px 18px 0">Şoförlere göre</h3>
+      ${D.drivers.length ? `<div style="overflow-x:auto"><table class="tbl vt rp-t"><thead><tr><th>Şoför</th><th class="num">Kayıt</th><th class="num">Yakıt</th><th class="num">Toplam</th><th class="num hm">Son kayıt</th></tr></thead>
+      <tbody>${D.drivers.map(d => `<tr><td>${esc(d.name)}</td><td class="num">${d.n}</td><td class="num">${TL(d.yakit)}</td><td class="num"><b>${TL(d.total)}</b></td><td class="num hm">${fmtD(d.last)}</td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="muted" style="padding:12px 18px 18px">Bu aralıkta şoför kaydı yok.</p>`}
+    </div>`;
+
+  $("#rpSeg").querySelectorAll("[data-p]").forEach(b => b.addEventListener("click", () => {
+    if (b.dataset.p === "custom" && RP.preset !== "custom") { const [f, t] = rpRange(); RP.from = f; RP.to = t; }
+    RP.preset = b.dataset.p; renderReports();
+  }));
+  if ($("#rpFrom")) {
+    const ch = () => { const f = $("#rpFrom").value, t = $("#rpTo").value; if (!f || !t) return; if (f > t) return toast("Başlangıç tarihi bitişten sonra olamaz.", true); RP.from = f; RP.to = t; renderReports(); };
+    $("#rpFrom").addEventListener("change", ch); $("#rpTo").addEventListener("change", ch);
+  }
+  $("#rpVeh").addEventListener("change", e => { RP.vid = e.target.value; renderReports(); });
+  $("#rpXls").addEventListener("click", () => exportReport(D));
+  $("#page").querySelectorAll("[data-goto]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); S.page = a.dataset.goto; renderShell(); }));
+  const ch = $("#rpChart");
+  if (ch) { ch.innerHTML = barChart(D.buckets, ch.clientWidth); bindChartHover(); }
+}
+
+/* Tek seriden oluşan çubuk grafik (SVG) – üzerine gelince tutar görünür */
+function barChart(b, width) {
+  const W = Math.max(300, Math.round(width || 640)), H = W < 500 ? 200 : 240, L = 44, R = 6, T = 12, B = 26;
+  const max = Math.max(...b.map(x => x.v), 0);
+  const step = niceStep(max / 4 || 1); const top = Math.max(step * 4, step);
+  const cw = (W - L - R) / b.length; const bw = Math.max(2, Math.min(36, cw * 0.62));
+  const y = v => T + (H - T - B) * (1 - v / top);
+  const every = Math.ceil(b.length / Math.max(3, Math.floor((W - L) / 64)));
+  let g = "";
+  for (let i = 0; i <= 4; i++) { const v = step * i; if (v > top) break; g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" class="gl"/><text x="${L - 8}" y="${y(v) + 4}" class="ax" text-anchor="end">${TLc(v)}</text>`; }
+  const bars = b.map((x, i) => {
+    const cx = L + cw * i + cw / 2; const h = (H - T - B) - (y(x.v) - T);
+    const r = Math.min(4, bw / 2, h);
+    const yy = y(x.v), x0 = cx - bw / 2, base = H - B;
+    const path = x.v > 0 ? `M${x0},${base}V${yy + r}Q${x0},${yy} ${x0 + r},${yy}H${x0 + bw - r}Q${x0 + bw},${yy} ${x0 + bw},${yy + r}V${base}Z` : "";
+    return `<g class="bar" data-l="${esc(x.label)}" data-v="${x.v}">
+      <rect x="${L + cw * i}" y="${T}" width="${cw}" height="${H - T - B}" class="hit"/>
+      ${path ? `<path d="${path}" class="bf"/>` : ""}
+      ${i % every === 0 ? `<text x="${cx}" y="${H - 9}" class="ax" text-anchor="middle">${esc(x.label)}</text>` : ""}</g>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Masraf grafiği">${g}<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" class="bl"/>${bars}</svg><div class="tip" id="rpTip"></div>`;
+}
+let rpResizeT;
+window.addEventListener("resize", () => { clearTimeout(rpResizeT); rpResizeT = setTimeout(() => { if (S.page === "reports" && $("#rpChart")) renderReports(); }, 250); });
+function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))); const n = raw / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+function bindChartHover() {
+  const c = $("#rpChart"); if (!c) return; const tip = $("#rpTip");
+  c.querySelectorAll(".bar").forEach(g => {
+    const show = e => {
+      c.querySelectorAll(".bar.on").forEach(x => x.classList.remove("on")); g.classList.add("on");
+      tip.innerHTML = `<small>${g.dataset.l}</small><b>${TL(+g.dataset.v)}</b>`;
+      const rc = c.getBoundingClientRect(), rb = g.querySelector(".hit").getBoundingClientRect();
+      tip.style.left = Math.min(Math.max(rb.left - rc.left + rb.width / 2, 50), rc.width - 50) + "px"; tip.classList.add("show");
+    };
+    g.addEventListener("mouseenter", show); g.addEventListener("click", show);
+  });
+  c.addEventListener("mouseleave", () => { tip.classList.remove("show"); c.querySelectorAll(".bar.on").forEach(x => x.classList.remove("on")); });
+}
+
+function exportReport(D) {
+  const fmt = s => s ? s.split("-").reverse().join(".") : "";
+  const veh = RP.vid ? (S.vehicles.find(v => v.id === RP.vid)?.plaka || "") : "Tüm araçlar";
+  const r2 = n => Math.round(n * 100) / 100;
+  const ozet = [["Driventa İşletme – Masraf Raporu", ""], ["Şirket", S.company.name], ["Tarih aralığı", `${fmt(D.from)} – ${fmt(D.to)}`], ["Araç", veh],
+    ["Not", "Sadece onaylanan kayıtlar"], ["", ""], ["Masraf türü", "Tutar (₺)"],
+    ...D.types.map(([t, v]) => [REC_TYPES[t] || t, r2(v)]), ["TOPLAM", r2(D.total)], ["", ""],
+    ["Toplam yol (km)", D.distAll || ""], ["Km başına maliyet (₺)", D.perKm != null ? r2(D.perKm) : ""]];
+  const araclar = [["Plaka", "Marka", "Model", "Atanan Şoför", "Yakıt (₺)", "Bakım/Lastik (₺)", "Diğer (₺)", "Toplam (₺)", "Yakıt (L/kWh)", "Yol (km)", "₺/km", "Kayıt sayısı"],
+    ...D.vehicles.map(x => [x.plaka, x.v?.marka || "", x.v?.model || "", x.v ? (driverName(x.v.assignedUid) || "") : "", r2(x.g.yakit), r2(x.g.bakim), r2(x.g.diger), r2(x.total), r2(x.litre) || "", x.dist || "", x.perKm != null ? r2(x.perKm) : "", x.n])];
+  const soforler = [["Şoför", "Kayıt sayısı", "Yakıt (₺)", "Toplam (₺)", "Son kayıt"], ...D.drivers.map(d => [d.name, d.n, r2(d.yakit), r2(d.total), fmt(d.last)])];
+  const kayitlar = [["Tarih", "Plaka", "Şoför", "Tür", "Detay", "Tutar (₺)", "Km", "Litre/kWh", "Birim fiyat (₺)", "Açıklama", "Onay tarihi"],
+    ...D.recs.slice().sort((a, b) => a.tarih.localeCompare(b.tarih)).map(r => { const e = r.ekstra || {};
+      return [fmt(r.tarih), r.plaka || recVehicle(r)?.plaka || "", recDriver(r), REC_TYPES[r.tur] || r.tur, e.altTur || "", r2(+r.tutar || 0), r.km ?? "", e.litre ?? "", e.birimFiyat ?? "", r.aciklama || "", r.reviewedAt ? fmt(isoD(new Date(r.reviewedAt))) : ""]; })];
+  const blob = writeXlsx([
+    { name: "Özet", widths: [26, 34], rows: ozet },
+    { name: "Araçlar", widths: [14, 14, 16, 20, 12, 15, 12, 13, 13, 11, 10, 12], rows: araclar },
+    { name: "Şoförler", widths: [24, 12, 13, 13, 13], rows: soforler },
+    { name: "Kayıtlar", widths: [12, 14, 20, 12, 26, 12, 11, 11, 14, 28, 13], rows: kayitlar }
+  ]);
+  download(blob, `driventa-rapor-${D.from}_${D.to}.xlsx`);
+  toast("Rapor Excel dosyası indirildi.");
 }
 
 /* ---------- Yükleme akışı ---------- */
