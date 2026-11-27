@@ -1,6 +1,6 @@
 // Driventa İşletme – Panel arayüzü
-import { api } from "./api.js?v=0.6";
-import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.6";
+import { api } from "./api.js?v=0.8";
+import { readXlsx, readCsv, writeXlsx, download } from "./xlsx.js?v=0.8";
 
 const $ = s => document.querySelector(s);
 const root = $("#root");
@@ -24,6 +24,7 @@ const I = {
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   x: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   search: '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  receipt: '<svg viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h4"/></svg>',
   chart: '<svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
   refresh: '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>'
 };
@@ -80,7 +81,7 @@ function renderAuth(mode = "login") {
           <li>${I.ok}Veriler Avrupa'daki sunucularda</li>
         </ul>
       </div>
-      <p class="muted" style="font-size:13px">© ${new Date().getFullYear()} BeSey · <a class="link" href="https://driventa.com.tr/gizlilik.html">Gizlilik</a></p>
+      <p class="muted" style="font-size:13px">© ${new Date().getFullYear()} BeSey · <a class="link" href="https://driventa.com.tr/gizlilik.html" target="_blank" rel="noopener">Gizlilik</a> · <a class="link" href="https://driventa.com.tr/veri-isleme-sozlesmesi.html" target="_blank" rel="noopener">Veri İşleme Sözleşmesi</a></p>
     </div>
     <div class="auth-main"><div class="auth-card">
       <div class="brand" style="margin-bottom:22px"><img src="assets/logo.png" alt=""><span>Driventa<small>İŞLETME</small></span></div>
@@ -135,6 +136,7 @@ function renderOnboarding() {
       <div class="field"><label>Telefon</label><input class="input" name="phone" maxlength="20" inputmode="tel" placeholder="05xx xxx xx xx"></div>
       <div class="field"><label>Araç sayısı</label>
         <select class="input" name="size"><option value="">Seçin</option><option>1–5</option><option>6–20</option><option>21–50</option><option>51–200</option><option>200+</option></select></div>
+      <label class="ck-row"><input type="checkbox" name="kabul"><span>Şirketi temsil etmeye yetkili olduğumu beyan eder, <a class="link" href="https://driventa.com.tr/kullanim-kosullari.html" target="_blank" rel="noopener">Kullanım Koşulları</a>'nı ve <a class="link" href="https://driventa.com.tr/veri-isleme-sozlesmesi.html" target="_blank" rel="noopener">Veri İşleme Sözleşmesi</a>'ni kabul ederim.</span></label>
       <button class="btn btn-primary btn-block" type="submit">Şirketi oluştur</button>
     </form>
     <p style="margin-top:16px;text-align:center"><a class="link" href="#" id="obOut">Farklı hesapla giriş yap</a></p>
@@ -145,6 +147,7 @@ function renderOnboarding() {
     e.preventDefault();
     const name = f.name.value.trim();
     if (name.length < 2) { $("#obMsg").innerHTML = '<div class="alert err">Şirket adını girin.</div>'; return; }
+    if (!f.kabul.checked) { $("#obMsg").innerHTML = '<div class="alert err">Devam etmek için Kullanım Koşulları ve Veri İşleme Sözleşmesi\'ni kabul etmelisin.</div>'; return; }
     busy(f.querySelector("button"), async () => {
       try {
         const cid = await api.createCompany(S.user, { name, phone: f.phone.value.trim(), size: f.size.value });
@@ -295,11 +298,23 @@ const Pages = {
     Promise.all([api.listMembers(c.id), api.listVehicles(c.id).catch(() => [])]).then(([ms, vs]) => {
       S.members = ms; S.vehicles = vs;
       const roleAd = { owner: "Sahip", admin: "Yönetici", driver: "Şoför" };
-      $("#mList").innerHTML = ms.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Ad</th><th>E-posta</th><th>Rol</th><th>Araç</th></tr></thead><tbody>
-        ${ms.sort((a, b) => (a.role === "owner" ? -1 : 1)).map(m => `<tr><td>${esc(m.name || "–")}</td><td>${esc(m.email || "–")}</td>
+      const vPl = id => { const v = (S.vehicles || []).find(x => x.id === id); return v ? esc(v.plaka) : ""; };
+      $("#mList").innerHTML = ms.length ? `<div style="overflow-x:auto"><table class="tbl"><thead><tr><th>Ad</th><th class="hm">E-posta</th><th>Rol</th><th>Araç</th><th>Durum</th><th></th></tr></thead><tbody>
+        ${ms.sort((a, b) => (a.role === "owner" ? -1 : b.role === "owner" ? 1 : 0)).map(m => `<tr class="${m.active === false ? "dim" : ""}"><td>${esc(m.name || "–")}<div class="muted sm-only" style="font-size:12px">${esc(m.email || "")}</div></td><td class="hm">${esc(m.email || "–")}</td>
           <td><span class="role ${m.role}">${roleAd[m.role] || m.role}</span></td>
-          <td class="muted">${m.role === "driver" ? (m.vehicleIds && m.vehicleIds.length ? m.vehicleIds.map(id => { const v = (S.vehicles || []).find(x => x.id === id); return v ? esc(v.plaka) : ""; }).filter(Boolean).join(", ") || m.vehicleIds.length + " araç" : "Atanmadı") : "–"}</td></tr>`).join("")}
-        </tbody></table></div>` : emptyBox("users", "Henüz ekip üyesi yok", "Katılım kodunu şoförlerinle paylaş.");
+          <td class="muted">${m.role === "driver" ? (m.vehicleIds && m.vehicleIds.length ? m.vehicleIds.map(vPl).filter(Boolean).join(", ") || m.vehicleIds.length + " araç" : "Atanmadı") : "–"}</td>
+          <td>${m.active === false ? '<span class="st-b late">Pasif</span>' : '<span class="st-b ok">Aktif</span>'}</td>
+          <td class="acts">${m.role === "driver" ? `<button class="btn btn-sm btn-ghost" data-act="${m.active === false ? "on" : "off"}" data-uid="${m.uid}">${m.active === false ? "Aktif yap" : "Pasif yap"}</button><button class="btn btn-sm btn-danger" data-rm="${m.uid}">${I.trash} Çıkar</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></div>
+        <p class="muted" style="font-size:12.5px;margin-top:12px"><b>Pasif yap:</b> şoför giriş yapabilir ama kayıt giremez ve şirket verilerini göremez. <b>Çıkar:</b> şoför şirketten tamamen çıkarılır, araç atamaları kaldırılır; girdiği kayıtlar şirket kayıtlarında kalır.</p>` : emptyBox("users", "Henüz ekip üyesi yok", "Katılım kodunu şoförlerinle paylaş.");
+      $("#mList").querySelectorAll("[data-act]").forEach(b => b.addEventListener("click", () => {
+        const m = S.members.find(x => x.uid === b.dataset.uid); const on = b.dataset.act === "on";
+        busy(b, async () => {
+          try { await api.setMemberActive(c.id, m.uid, on); m.active = on; toast(on ? `${m.name || m.email} tekrar aktif.` : `${m.name || m.email} pasif yapıldı.`); Pages.drivers(); }
+          catch (err) { toast(errMsg(err), true); }
+        });
+      }));
+      $("#mList").querySelectorAll("[data-rm]").forEach(b => b.addEventListener("click", () => removeMemberModal(S.members.find(x => x.uid === b.dataset.rm))));
     }).catch(err => { $("#mList").innerHTML = `<div class="alert err">${esc(errMsg(err))}</div>`; });
   },
 
@@ -429,6 +444,22 @@ const toVehicle = f => ({
 });
 const drivers = () => (S.members || []).filter(m => m.role === "driver" && m.active);
 const driverName = uid => { const m = (S.members || []).find(x => x.uid === uid); return m ? (m.name || m.email) : ""; };
+
+function removeMemberModal(m) {
+  if (!m) return;
+  const vs = (S.vehicles || []).filter(v => v.assignedUid === m.uid);
+  const w = openModal(`
+    <div class="m-head"><h3>Şoför şirketten çıkarılsın mı?</h3><button class="icon" data-close>${I.x}</button></div>
+    <p class="muted"><b style="color:var(--text)">${esc(m.name || m.email)}</b> şirketten çıkarılacak.${vs.length ? ` Atanmış araçları (${vs.map(v => esc(v.plaka)).join(", ")}) boşa alınacak.` : ""} Girdiği kayıtlar şirket kayıtlarında kalır. Şoför tekrar katılmak isterse katılım kodunu girmesi gerekir; kodu başkalarıyla da paylaştıysa yenilemeni öneririz.</p>
+    <div class="m-foot"><button class="btn btn-ghost" data-close>Vazgeç</button><button class="btn btn-danger" id="rmOk">${I.trash} Çıkar</button></div>`);
+  w.querySelector("#rmOk").addEventListener("click", e => busy(e.currentTarget, async () => {
+    try {
+      await api.removeMember(S.company.id, m.uid, vs.map(v => v.id));
+      vs.forEach(v => v.assignedUid = null); S.members = S.members.filter(x => x.uid !== m.uid);
+      closeModal(); toast("Şoför şirketten çıkarıldı."); Pages.drivers();
+    } catch (err) { toast(errMsg(err), true); }
+  }));
+}
 
 /* ---------- Pencere (modal) ---------- */
 function openModal(html, wide) {
@@ -823,7 +854,7 @@ function renderApprovals() {
       <td style="white-space:nowrap">${fmtD(r.tarih)}</td>
       <td><span class="plate"><i>TR</i><b>${esc(r.plaka || v?.plaka || "?")}</b></span>${v ? "" : '<div class="errc">Araç silinmiş</div>'}</td>
       <td style="white-space:nowrap">${esc(recDriver(r))}</td>
-      <td><b style="font-weight:600">${REC_TYPES[r.tur] || esc(r.tur)}</b>${det ? `<div class="muted" style="font-size:12.5px">${det}</div>` : ""}${dUp ? '<div class="kmup">↻ takvim güncellenir</div>' : ""}</td>
+      <td><b style="font-weight:600">${REC_TYPES[r.tur] || esc(r.tur)}</b>${det ? `<div class="muted" style="font-size:12.5px">${det}</div>` : ""}${dUp ? '<div class="kmup">↻ takvim güncellenir</div>' : ""}${(r.ekstra || {}).fis ? `<button class="fis-link" data-fis="${r.id}">${I.receipt} Fişi gör</button>` : ""}</td>
       <td class="num">${r.km != null ? NUM(r.km) : "–"}${kmUp ? `<div class="kmup" title="Onaylanınca aracın kilometresi ${NUM(r.km)} olur">↑ araç km</div>` : ""}</td>
       <td class="num"><b>${TL(r.tutar)}</b></td>
       <td class="hm muted" style="max-width:240px">${esc(apTab === "rejected" ? (r.redNedeni || "–") : (r.aciklama || "–"))}</td>
@@ -832,6 +863,7 @@ function renderApprovals() {
     </tr>`; }).join("")}</tbody></table></div>
     <div class="tfoot">${list.length} kayıt · Toplam <b style="color:var(--text)">${TL(total)}</b>${P ? ` · <span class="muted">Onaylanan kayıtlar şoför tarafından değiştirilemez.</span>` : ""}</div>`;
 
+  box.querySelectorAll("[data-fis]").forEach(b => b.addEventListener("click", () => receiptModal(all.find(r => r.id === b.dataset.fis))));
   if (P) {
     $("#apAll").addEventListener("change", e => { list.forEach(r => e.target.checked ? apSel.add(r.id) : apSel.delete(r.id)); renderApprovals(); });
     box.querySelectorAll("[data-ck]").forEach(c => c.addEventListener("change", () => { c.checked ? apSel.add(c.dataset.ck) : apSel.delete(c.dataset.ck); renderApprovals(); }));
@@ -879,6 +911,20 @@ function approve(ids, btn) {
       try { await loadRecords(); renderApprovals(); } catch (e) { /* liste yenilenemedi */ }
     }
   });
+}
+
+function receiptModal(r) {
+  if (!r) return;
+  const w = openModal(`
+    <div class="m-head"><h3>Fiş · ${esc(r.plaka || "")}</h3><button class="icon" data-close aria-label="Kapat">${I.x}</button></div>
+    <p class="muted" style="margin-bottom:12px">${REC_TYPES[r.tur] || ""} · ${TL(r.tutar)} · ${fmtD(r.tarih)} · ${esc(recDriver(r))}${(r.ekstra || {}).litre ? ` · ${NUM((r.ekstra || {}).litre)} L` : ""}</p>
+    <div id="fisBox" class="fis-box"><div class="spinner"></div></div>
+    <div class="m-foot"><button class="btn btn-ghost" data-close>Kapat</button></div>`);
+  api.getReceipt(S.company.id, r.id).then(img => {
+    const box = w.querySelector("#fisBox"); if (!box) return;
+    box.innerHTML = img ? `<a href="data:image/jpeg;base64,${img}" download="fis-${esc(String(r.plaka || "").replace(/\s/g, ""))}-${r.tarih}.jpg" title="İndir"><img src="data:image/jpeg;base64,${img}" alt="Fiş fotoğrafı"></a>`
+      : `<p class="muted">Fiş fotoğrafı bulunamadı. Şoför fotoğrafı henüz göndermemiş olabilir (internet bağlantısı bekleniyor).</p>`;
+  }).catch(err => { const box = w.querySelector("#fisBox"); if (box) box.innerHTML = `<div class="alert err">${esc(errMsg(err))}</div>`; });
 }
 
 function rejectModal(r) {
@@ -1090,14 +1136,14 @@ function exportReport(D) {
   const araclar = [["Plaka", "Marka", "Model", "Atanan Şoför", "Yakıt (₺)", "Bakım/Lastik (₺)", "Diğer (₺)", "Toplam (₺)", "Yakıt (L/kWh)", "Yol (km)", "₺/km", "Kayıt sayısı"],
     ...D.vehicles.map(x => [x.plaka, x.v?.marka || "", x.v?.model || "", x.v ? (driverName(x.v.assignedUid) || "") : "", r2(x.g.yakit), r2(x.g.bakim), r2(x.g.diger), r2(x.total), r2(x.litre) || "", x.dist || "", x.perKm != null ? r2(x.perKm) : "", x.n])];
   const soforler = [["Şoför", "Kayıt sayısı", "Yakıt (₺)", "Toplam (₺)", "Son kayıt"], ...D.drivers.map(d => [d.name, d.n, r2(d.yakit), r2(d.total), fmt(d.last)])];
-  const kayitlar = [["Tarih", "Plaka", "Şoför", "Tür", "Detay", "Tutar (₺)", "Km", "Litre/kWh", "Birim fiyat (₺)", "Açıklama", "Onay tarihi"],
+  const kayitlar = [["Tarih", "Plaka", "Şoför", "Tür", "Detay", "Tutar (₺)", "Km", "Litre/kWh", "Birim fiyat (₺)", "Açıklama", "Onay tarihi", "Fiş"],
     ...D.recs.slice().sort((a, b) => a.tarih.localeCompare(b.tarih)).map(r => { const e = r.ekstra || {};
-      return [fmt(r.tarih), r.plaka || recVehicle(r)?.plaka || "", recDriver(r), REC_TYPES[r.tur] || r.tur, e.altTur || "", r2(+r.tutar || 0), r.km ?? "", e.litre ?? "", e.birimFiyat ?? "", r.aciklama || "", r.reviewedAt ? fmt(isoD(new Date(r.reviewedAt))) : ""]; })];
+      return [fmt(r.tarih), r.plaka || recVehicle(r)?.plaka || "", recDriver(r), REC_TYPES[r.tur] || r.tur, e.altTur || "", r2(+r.tutar || 0), r.km ?? "", e.litre ?? "", e.birimFiyat ?? "", r.aciklama || "", r.reviewedAt ? fmt(isoD(new Date(r.reviewedAt))) : "", e.fis ? "Var" : ""]; })];
   const blob = writeXlsx([
     { name: "Özet", widths: [26, 34], rows: ozet },
     { name: "Araçlar", widths: [14, 14, 16, 20, 12, 15, 12, 13, 13, 11, 10, 12], rows: araclar },
     { name: "Şoförler", widths: [24, 12, 13, 13, 13], rows: soforler },
-    { name: "Kayıtlar", widths: [12, 14, 20, 12, 26, 12, 11, 11, 14, 28, 13], rows: kayitlar }
+    { name: "Kayıtlar", widths: [12, 14, 20, 12, 26, 12, 11, 11, 14, 28, 13, 8], rows: kayitlar }
   ]);
   download(blob, `driventa-rapor-${D.from}_${D.to}.xlsx`);
   toast("Rapor Excel dosyası indirildi.");

@@ -9,7 +9,7 @@ import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, getDocs, serverTimestamp,
   writeBatch, arrayUnion, arrayRemove
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=0.6";
+import { firebaseConfig } from "./firebase-config.js?v=0.8";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -57,7 +57,8 @@ export const api = {
     const joinCode = await freeJoinCode();
     await setDoc(doc(db, "companies", cid), {
       name, phone: phone || "", size: size || "", ownerUid: user.uid, joinCode,
-      plan: "trial", createdAt: serverTimestamp()
+      plan: "trial", createdAt: serverTimestamp(),
+      kabul: { surum: "1.0", uid: user.uid, email: user.email || "", tarih: serverTimestamp() }
     });
     await setDoc(doc(db, "companies", cid, "members", user.uid), {
       role: "owner", name: user.displayName || "", email: user.email || "",
@@ -86,6 +87,20 @@ export const api = {
     return code;
   },
 
+  async getReceipt(cid, rid) {
+    const s = await getDoc(doc(db, "companies", cid, "receipts", rid));
+    return s.exists() ? s.data().img : null;
+  },
+  async setMemberActive(cid, uid, active) {
+    await updateDoc(doc(db, "companies", cid, "members", uid), { active });
+  },
+  /* Şoförü şirketten çıkarır: üyelik silinir, atanmış araçlar boşa alınır (tek işlemde) */
+  async removeMember(cid, uid, vehicleIds) {
+    const b = writeBatch(db);
+    (vehicleIds || []).forEach(vid => b.update(doc(db, "companies", cid, "vehicles", vid), { assignedUid: null, updatedAt: serverTimestamp() }));
+    b.delete(doc(db, "companies", cid, "members", uid));
+    await b.commit();
+  },
   async listMembers(cid) {
     const s = await getDocs(collection(db, "companies", cid, "members"));
     return s.docs.map(d => ({ uid: d.id, ...d.data() }));

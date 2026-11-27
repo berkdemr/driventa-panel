@@ -230,7 +230,17 @@ button.kpi:hover{border-color:var(--accent)}
 .mt-alert small{display:block;color:var(--text-2);font-size:13px;margin-top:2px}
 .mt-alert .go{margin-left:auto;color:var(--accent);font-weight:600;font-size:13.5px;white-space:nowrap}
 
+.fis-link{display:inline-flex;align-items:center;gap:5px;margin-top:5px;font-size:12.5px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:3px 10px}
+.fis-link svg{width:14px;height:14px}
+.fis-box{text-align:center;background:var(--bg);border-radius:12px;padding:10px;min-height:120px}
+.fis-box img{max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto;background:#fff}
+.ck-row{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--text-2);margin:4px 0 18px;line-height:1.45;cursor:pointer}
+.ck-row input{width:18px;height:18px;margin-top:1px;accent-color:var(--accent);flex-shrink:0}
+tr.dim td{opacity:.6}
+.sm-only{display:none}
+
 @media (max-width:900px){
+  .sm-only{display:block}
   .mt-alert .go{display:none}
   .rp-grid{grid-template-columns:1fr}
   .seg{width:100%;overflow-x:auto}
@@ -261,6 +271,6 @@ button.kpi:hover{border-color:var(--accent)}
 <body>
 <div id="root"><div class="center"><div class="spinner"></div></div></div>
 <div class="toast" id="toast"></div>
-<script type="module" src="app.js?v=0.6"></script>
+<script type="module" src="app.js?v=0.8"></script>
 </body>
 </html>
