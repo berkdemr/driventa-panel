@@ -1,89 +1,143 @@
 rules_version = '2';
 
-// Driventa İşletme – Firestore güvenlik kuralları
+// Driventa İşletme – Firestore güvenlik kuralları (sürüm F6 + fiş)
 // Roller: owner (şirket sahibi), admin (yönetici), driver (şoför)
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ---------- Yardımcılar ----------
     function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
     function companyPath(cid) { return /databases/$(database)/documents/companies/$(cid); }
-    function memberPath(cid) { return /databases/$(database)/documents/companies/$(cid)/members/$(request.auth.uid); }
+    function memberPath(cid) { return /databases/$(database)/documents/companies/$(cid)/members/$(uid()); }
+    function company(cid) { return get(companyPath(cid)).data; }
     function me(cid) { return get(memberPath(cid)).data; }
     function isMember(cid) { return signedIn() && exists(memberPath(cid)) && me(cid).active == true; }
     function isManager(cid) { return isMember(cid) && me(cid).role in ['owner', 'admin']; }
     function isDriver(cid) { return isMember(cid) && me(cid).role == 'driver'; }
     function hasVehicle(cid, vid) { return vid in me(cid).vehicleIds; }
+    function data() { return request.resource.data; }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function isStr(v, max) { return v is string && v.size() <= max; }
+    function optStr(m, k, max) { return !(k in m) || m[k] == null || isStr(m[k], max); }
+    function optNum(m, k) { return !(k in m) || m[k] == null || m[k] is number; }
 
-    // Her kullanıcı yalnızca kendi profil kaydını görür ve düzenler
-    match /users/{uid} {
-      allow read, write: if signedIn() && request.auth.uid == uid;
+    // ---------- Kullanıcı profili ----------
+    // Herkes yalnızca kendi profilini görür, düzenler ve silebilir
+    match /users/{userId} {
+      allow read, delete: if signedIn() && uid() == userId;
+      allow create, update: if signedIn() && uid() == userId
+        && data().keys().hasOnly(['name', 'email', 'companyId', 'role', 'createdAt'])
+        && optStr(data(), 'name', 80) && optStr(data(), 'email', 120)
+        && (!('role' in data()) || data().role in ['owner', 'driver']);
     }
 
-    // Katılım kodları: şoför kodu girerek hangi şirkete katılacağını bulur
+    // ---------- Katılım kodları ----------
+    // Kod girilerek hangi şirkete katılınacağı bulunur; liste alınamaz
     match /joinCodes/{code} {
       allow get: if signedIn();
-      allow list: if false;
-      allow create: if signedIn() && isManager(request.resource.data.companyId);
-      allow delete: if signedIn() && isManager(resource.data.companyId);
-      allow update: if false;
+      allow list, update: if false;
+      allow create: if isManager(data().companyId) && data().keys().hasOnly(['companyId']);
+      allow delete: if isManager(resource.data.companyId);
     }
 
+    // ---------- Şirketler ----------
     match /companies/{cid} {
       allow get: if isMember(cid);
-      allow list: if false;
-      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if isManager(cid) && request.resource.data.ownerUid == resource.data.ownerUid;
-      allow delete: if false;
+      allow list, delete: if false;
+      // Şirketi kuran kişi sahibi olur; paket her zaman deneme ile başlar
+      allow create: if signedIn()
+        && data().ownerUid == uid()
+        && data().plan == 'trial'
+        && data().keys().hasOnly(['name', 'phone', 'size', 'ownerUid', 'joinCode', 'plan', 'createdAt', 'kabul'])
+        && isStr(data().name, 80);
+      // Yönetici sadece ad, telefon, büyüklük ve katılım kodunu değiştirebilir (paket ve sahip değişemez)
+      allow update: if isManager(cid)
+        && changed().hasOnly(['name', 'phone', 'size', 'joinCode'])
+        && isStr(data().name, 80);
 
-      match /members/{uid} {
-        allow get: if signedIn() && (request.auth.uid == uid || isManager(cid));
+      // ---------- Üyeler ----------
+      match /members/{memberId} {
+        allow get: if signedIn() && (uid() == memberId || isManager(cid));
         allow list: if isManager(cid);
-        allow create: if signedIn() && request.auth.uid == uid && (
-          // Şirketi kuran kişi kendini "owner" olarak ekler
-          (request.resource.data.role == 'owner'
-            && get(companyPath(cid)).data.ownerUid == request.auth.uid)
-          ||
-          // Şoför doğru katılım koduyla, araçsız ve aktif olarak katılır
-          (request.resource.data.role == 'driver'
-            && request.resource.data.joinCode == get(companyPath(cid)).data.joinCode
-            && request.resource.data.vehicleIds.size() == 0
-            && request.resource.data.active == true)
-        );
-        // Yöneticiler üyeleri düzenler; şirket sahibinin kaydına sadece sahibi dokunabilir
+        allow create: if signedIn() && uid() == memberId
+          && data().keys().hasOnly(['role', 'name', 'email', 'vehicleIds', 'active', 'joinCode', 'joinedAt', 'kvkkOnay'])
+          && optStr(data(), 'name', 80) && optStr(data(), 'email', 120)
+          && (
+            // Şirketi kuran kişi kendini "owner" olarak ekler
+            (data().role == 'owner' && company(cid).ownerUid == uid())
+            ||
+            // Şoför doğru katılım koduyla, araçsız ve aktif olarak katılır
+            (data().role == 'driver'
+              && data().joinCode == company(cid).joinCode
+              && data().vehicleIds.size() == 0
+              && data().active == true)
+          );
+        // Yönetici üyeleri düzenler: araç atama, aktif/pasif. Kimse "owner" yapılamaz.
+        // Şirket sahibinin kaydını sadece sahibi düzenleyebilir ve rolü owner kalır.
         allow update: if isManager(cid) && (
-          uid != get(companyPath(cid)).data.ownerUid
-          || (request.auth.uid == uid && request.resource.data.role == 'owner')
+          (memberId != company(cid).ownerUid
+            && data().role in ['admin', 'driver']
+            && changed().hasOnly(['vehicleIds', 'active', 'role']))
+          || (memberId == uid() && memberId == company(cid).ownerUid
+            && data().role == 'owner' && changed().hasOnly(['name', 'vehicleIds']))
         );
-        allow delete: if isManager(cid) && uid != get(companyPath(cid)).data.ownerUid;
+        // Yönetici bir üyeyi şirketten çıkarabilir (sahip hariç); şoför kendi kaydını silebilir (hesap silme)
+        allow delete: if (isManager(cid) && memberId != company(cid).ownerUid)
+          || (signedIn() && uid() == memberId && resource.data.role == 'driver');
       }
 
+      // ---------- Araçlar ----------
       match /vehicles/{vid} {
         allow read: if isManager(cid) || (isDriver(cid) && hasVehicle(cid, vid));
-        allow write: if isManager(cid);
+        allow create, update: if isManager(cid)
+          && isStr(data().plaka, 16) && data().km is number && data().km >= 0
+          && optNum(data(), 'sonBakimKm') && optNum(data(), 'bakimAralikKm') && optNum(data(), 'bakimAralikAy')
+          && optStr(data(), 'muayeneBitis', 10) && optStr(data(), 'sigortaBitis', 10)
+          && optStr(data(), 'kaskoBitis', 10) && optStr(data(), 'sonBakimTarih', 10);
+        allow delete: if isManager(cid);
       }
 
+      // ---------- Kayıtlar (masraflar) ----------
       match /records/{rid} {
-        // Şoför sadece kendi girdiği kayıtları görür (toplamları/raporları göremez)
+        // Şoförün kayıt alanları: başka alan yazamaz, onay bilgilerini değiştiremez
+        function driverRecordOk() {
+          return data().keys().hasOnly(['aracId', 'plaka', 'tur', 'tutar', 'tarih', 'km', 'aciklama', 'ekstra',
+                                        'status', 'createdBy', 'createdByName', 'createdAt', 'updatedAt'])
+            && data().status == 'pending'
+            && data().createdBy == uid()
+            && data().tur in ['yakit', 'bakim', 'sigorta', 'mtv', 'muayene', 'lastik', 'otopark', 'hgs', 'diger']
+            && data().tutar is number && data().tutar > 0 && data().tutar < 10000000
+            && isStr(data().tarih, 10)
+            && (data().km == null || (data().km is number && data().km >= 0))
+            && optStr(data(), 'aciklama', 500) && optStr(data(), 'createdByName', 80)
+            && hasVehicle(cid, data().aracId);
+        }
+        // Şoför sadece kendi girdiği kayıtları görür (toplamları ve raporları göremez)
         allow read: if isManager(cid)
-          || (isDriver(cid) && resource.data.createdBy == request.auth.uid);
-        // Şoför yalnızca kendine atanmış araca, "onay bekliyor" durumunda kayıt ekler
-        allow create: if isManager(cid)
-          || (isDriver(cid)
-              && request.resource.data.createdBy == request.auth.uid
-              && request.resource.data.status == 'pending'
-              && hasVehicle(cid, request.resource.data.aracId));
-        // Şoför, onaylanmamış kendi kaydını düzeltebilir; onaylanan kayda dokunamaz
+          || (isDriver(cid) && resource.data.createdBy == uid());
+        allow create: if isManager(cid) || (isDriver(cid) && driverRecordOk());
+        // Şoför sadece onay bekleyen kendi kaydını düzeltebilir; oluşturma zamanı değişemez
         allow update: if isManager(cid)
           || (isDriver(cid)
-              && resource.data.createdBy == request.auth.uid
+              && resource.data.createdBy == uid()
               && resource.data.status == 'pending'
-              && request.resource.data.status == 'pending'
-              && request.resource.data.createdBy == request.auth.uid
-              && hasVehicle(cid, request.resource.data.aracId));
+              && driverRecordOk()
+              && !changed().hasAny(['createdAt', 'createdBy']));
         allow delete: if isManager(cid)
-          || (isDriver(cid)
-              && resource.data.createdBy == request.auth.uid
-              && resource.data.status == 'pending');
+          || (isDriver(cid) && resource.data.createdBy == uid() && resource.data.status == 'pending');
+      }
+
+      // ---------- Fiş fotoğrafları (kayıtla aynı kimlik) ----------
+      // Şoför kendi fişini yükler/siler; yöneticiler görür. Boyut sınırlı (~450 KB).
+      match /receipts/{rid} {
+        allow read: if isManager(cid) || (isDriver(cid) && resource.data.createdBy == uid());
+        allow create, update: if (isDriver(cid) || isManager(cid))
+          && data().keys().hasOnly(['img', 'createdBy', 'createdAt'])
+          && data().createdBy == uid()
+          && data().img is string && data().img.size() < 600000
+          && (resource == null || resource.data.createdBy == uid() || isManager(cid));
+        allow delete: if isManager(cid) || (isDriver(cid) && resource.data.createdBy == uid());
       }
 
       match /reminders/{mid} {
